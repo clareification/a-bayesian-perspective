@@ -1,6 +1,6 @@
 import torch.nn.functional as F
 import torch.nn as nn
-
+import torch
 from torchvision import models, datasets, transforms
 
 class SmallNet(nn.Module):

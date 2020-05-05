@@ -15,9 +15,7 @@ import matplotlib.pyplot as plt
 from model_zoo import *
 from data_loaders import get_FMNIST, get_synthetic_data
 
-_, _, dl, tl = fmnist_data()
 
-dl.dataset[0][0].shape
 
 def train_step(x, y, m, o, criterion):
     o.zero_grad()
@@ -25,9 +23,14 @@ def train_step(x, y, m, o, criterion):
     l = criterion(out, y.reshape(-1))
     l.backward()
     o.step()
+    out2 = m(x)
+    l2 = criterion(out2, y.reshape(-1))
+    if np.random.rand() > 0.9:
+        print(l - l2)
+    # print(torch.norm(out - out2))
     return out, l
 
-def linear_train_step(outs, w, y, criterion, model_backprop=False, model_opts=None):
+def linear_train_step(outs, w, y, criterion, model_backprop=False, model_opts=None, models=None, x=None, step_size=0.01):
     outs = torch.stack(outs, axis=1).detach().numpy()
     outs = outs.T
 
@@ -44,7 +47,9 @@ def linear_train_step(outs, w, y, criterion, model_backprop=False, model_opts=No
         w = w - (step_size*g)
     
     if model_backprop:
-        for o in model_opts:
+        for i, o in enumerate(model_opts):
+            # local_out = models[i](x)
+            # local_ou
             o.step()
     return l
     
@@ -58,8 +63,6 @@ def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001):
 
     lin_losses = []
     for data in training_data:     
-        if outer_i >= k:
-            return lin_losses, losses, w
         y = data[1]
 
         x = data[0].reshape([-1, 784])
@@ -72,10 +75,10 @@ def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001):
 
         # Linear step    
         
-        linear_train_step(outs, w, y, criterion)
-        w.requires_grad = True
+        # linear_train_step(outs, w, y, criterion)
+        # w.requires_grad = True
         
-        lin_losses.append(l.detach().item())
+        # lin_losses.append(l.detach().item())
     return lin_losses, losses, w
 
 
@@ -88,8 +91,6 @@ def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001):
 
     lin_losses = []
     for data in training_data:     
-        if outer_i >= k:
-            return lin_losses, losses, w
         y = data[1]
 
         x = data[0].reshape([-1, 784])
@@ -98,11 +99,11 @@ def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001):
         # Compute model outputs
         for i, (m, o) in enumerate(zip(ms, opts)):
             o.zero_grad()
-            out = m(o)
+            out = m(x)
             outs.append(out)
 
         # Compute loss of linear layer and backprop         
-        linear_train_step(outs, w, y, opts, criterion)
+        l = linear_train_step(outs, w, y, criterion, True, model_opts=opts)
 
         w.requires_grad = True
         
@@ -113,7 +114,10 @@ if __name__ == "__main__":
     # Load dataset
 
     # Train one epoch 
-    listl = list(dl)
+    
+    _, _, listl, tl = get_FMNIST()
+    listl = list(listl)[:10]
+
 
     dim_in = 784
     dim_out=10
@@ -132,33 +136,37 @@ if __name__ == "__main__":
     lin.requires_grad = True
     print(lin.requires_grad)
     lin_opt = torch.optim.SGD([lin], lr=0.01)
-
-    l, l2, lin = train_fmnist_k_steps(lin, lin_opt, models, optims, listl[:10], k=100)
+    l2s = [[] for _ in models]
+    for _ in range(150):
+        l2, lin = train_combo_one_epoch(lin, models, optims, listl)
+        l2s = [s + l2 for i, s in enumerate(l2s)]
+    l2 = l2s
 
     ps = lin
     print(ps)
     for i,ls in enumerate(l2):
-    print(ls[-1])
-    plt.plot(ls[19:], label='w=' + str(widths[i]))
-
+        print(ls[-1])
+        plt.plot(ls[1:], label='w=' + str(widths[i]))
+    plt.show()
     #print(l[-1]) 
     i = [sum(z) for z in l2]
     print(i)
     print(lin.detach().numpy().reshape(-1))
 
-    plt.plot(l[10:], label='lin')
-    plt.legend()
-    plt.show()
+    # plt.plot(l[10:], label='lin')
+    # plt.legend()
+    # plt.show()
 
     sums = [sum(z) for z in l2]
     plt.scatter(sums, lin.detach().numpy().reshape(-1))
+    plt.show()
 
     mean_l = []
-    for j, m in enumerate(models):
-    criterion = torch.nn.CrossEntropyLoss()
-    l = 0
-    # Compute test accuracy
-    for i, dat in enumerate(tl):
-        out = m(dat[0].reshape(-1, 784))
-        l += criterion(out, dat[1])
-    mean_l.append(l/i)
+    # for j, m in enumerate(models):
+    #     criterion = torch.nn.CrossEntropyLoss()
+    # l = 0
+    # # Compute test accuracy
+    # for i, dat in enumerate(tl):
+    #     out = m(dat[0].reshape(-1, 784))
+    #     l += criterion(out, dat[1])
+    # mean_l.append(l/i)

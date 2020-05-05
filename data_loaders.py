@@ -34,10 +34,12 @@ def get_FMNIST(root="./"):
     channels = 1
     num_classes = 10
     fmnist = datasets.MNIST(root + "data/FMNIST", train=True, transform=transforms.ToTensor(), target_transform=None, download=True)
-
+    data_loader = torch.utils.data.DataLoader(fmnist,
+                                          batch_size=10,
+                                          shuffle=True)
     ftest = datasets.MNIST(root + "data/FMNIST", train=False, transform=transforms.ToTensor(), target_transform=None, download=True)
 
-  return input_size, num_classes, fmnist, ftest
+    return input_size, num_classes, data_loader, ftest
 
 def get_synthetic_data(latent, d, n):
   x = np.random.rand(n, latent)
