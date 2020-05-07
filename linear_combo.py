@@ -54,12 +54,12 @@ def linear_train_step(outs, w, y, criterion, model_backprop=False, model_opts=No
     return l
     
 
-def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001):
+def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=torch.nn.CrossEntropyLoss):
     # Train weights and models concurrently.
     # Don't backprop linear loss to models
     M = len(ms)
     losses = [[] for m in ms]
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = loss_fn()
 
     lin_losses = []
     for data in training_data:     
@@ -82,12 +82,12 @@ def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001):
     return lin_losses, losses, w
 
 
-def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001):
+def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=torch.nn.CrossEntropyLoss):
     # Train weights and models concurrently.
     # DO backprop linear loss to models
     M = len(ms)
     losses = [[] for m in ms]
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = loss_fn()
 
     lin_losses = []
     for data in training_data:     

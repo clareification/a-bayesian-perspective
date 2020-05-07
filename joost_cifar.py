@@ -35,23 +35,6 @@ def get_CIFAR10(root="./"):
     return input_size, num_classes, train_dataset, test_dataset
 
 
-class Model(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.resnet = models.resnet18(pretrained=False, num_classes=10)
-
-        self.resnet.conv1 = torch.nn.Conv2d(
-            3, 64, kernel_size=3, stride=1, padding=1, bias=False
-        )
-        self.resnet.maxpool = torch.nn.Identity()
-
-    def forward(self, x):
-        x = self.resnet(x)
-        x = F.log_softmax(x, dim=1)
-
-        return x
-
 
 def train(model, train_loader, optimizer, epoch):
     model.train()

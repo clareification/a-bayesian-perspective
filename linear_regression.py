@@ -13,9 +13,20 @@ def build_random_features(n=100, d=100, num_informative_features = 20):
 
 def build_gaussian_features(n=200, d=10):
     y = np.random.rand(n)
-    X = np.zeros((n, k))
-    for i in range(int(k/2)):
-        X[:, i] = y + np.random.normal(0, 0.1 * i, n)
+    X = np.zeros((n, d))
+    for i in range(int(d/2)):
+        X[:, 2*i] = y + np.random.normal(0, 0.1 * i, n)
+    return X, y
+
+def build_quadratic_fn(n=100, xmax=10):
+    x = xmax*np.random.rand(n)
+    y = x **2
+    return x, y
+
+def build_oned_features(n=200, d=10):
+    y = np.random.rand(n)
+    X = np.random.rand(n,d)
+    X[:, 0] = y
     return X, y
 
 def marginal_likelihood(x, y, n=200, l=1.0, prior=1.0):
@@ -69,8 +80,7 @@ def train_one_epoch_iterative(w, X, y, num_steps, step_size=0.001, log_interval=
     return w, loss_gd
 
 
-def get_posterior_samples(x, y, prior_sigma=1.0):
-    l=0.01
+def get_posterior_samples(x, y, prior_sigma=1.0, l=0.01):
     N = x.shape[0]
     # Posterior covariance
     S0 = prior_sigma * np.eye(x.shape[1])
@@ -88,7 +98,7 @@ def get_posterior_mean(x, y, prior_sigma=1.0):
     mN = SN @ np.dot(x.T,y)/l
     return lambda : mN
 
-def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0):
+def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0, k=10, prior_sigma=0.1):
   n = len(xtrain)
   test_errors = [0]
   mean_errors = [0]
@@ -100,8 +110,8 @@ def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0):
     w = np.linalg.lstsq(trains, train_ys, rcond=None)[0]
     err = np.linalg.norm(xtrain[i+1] @ w - ytrain[i+1])/l
     mean_errors.append(err)
-    sampler = get_posterior_samples(trains, train_ys)
-    k = 10
+    sampler = get_posterior_samples(trains, train_ys, prior_sigma, l)
+    
     samples= []
     for _ in range(k): 
         w = sampler()
@@ -147,7 +157,6 @@ def sample_then_optimize(prior_sampler, xtrain, ytrain, l=0.1, k=1):
         ws.append(w)
         dists.append(dist)
     return ls, dists, opts, ws
-
 
 def generate_lb_ml_plot():
     n = 200
