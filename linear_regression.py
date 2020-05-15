@@ -80,18 +80,22 @@ def train_one_epoch_iterative(w, X, y, num_steps, step_size=0.001, log_interval=
     return w, loss_gd
 
 
-def get_posterior_samples(x, y, prior_sigma=1.0, l=0.01):
-    N = x.shape[0]
+def get_posterior_samples(x, y, prior_sigma=1.0, l=0.01, N=None):
+    
     # Posterior covariance
-    S0 = prior_sigma * np.eye(x.shape[1])
-    SN = np.linalg.inv(np.linalg.inv(S0) + 1/l * x.T@x)
-    # Posterior mean
-    mN = SN @ np.dot(x.T,y)/l
+    if len(x) > 0:
+        S0 = prior_sigma * np.eye(x.shape[1])
+        SN = np.linalg.inv(np.linalg.inv(S0) + 1/l * x.T@x)
+        # Posterior mean
+        mN = SN @ np.dot(x.T,y)/l
+    else:
+        mN = np.zeros(N)
+        S0 = prior_sigma * np.eye(N)
+        SN = S0
     # Return a function that generates samples from the posterior.
     return lambda : np.random.multivariate_normal(mN, SN)
 
-def get_posterior_mean(x, y, prior_sigma=1.0):
-    l=0.01
+def get_posterior_mean(x, y, prior_sigma=1.0, l=0.01):
     N = x.shape[0]
     S0 = prior_sigma * np.eye(x.shape[1])
     SN = np.linalg.inv(np.linalg.inv(S0) + 1/l * x.T@x)
@@ -108,14 +112,14 @@ def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0, k=10, prior_sigma=0
     trains = xtrain[:i]
     train_ys = ytrain[:i]
     w = np.linalg.lstsq(trains, train_ys, rcond=None)[0]
-    err = np.linalg.norm(xtrain[i+1] @ w - ytrain[i+1])/l
+    err = - ( np.linalg.norm(xtrain[i+1] @ w - ytrain[i+1])/l) - 1/2 * np.log(2 * np.pi * l)
     mean_errors.append(err)
-    sampler = get_posterior_samples(trains, train_ys, prior_sigma, l)
+    sampler = get_posterior_samples(trains, train_ys, prior_sigma, l, N=xtrain.shape[1])
     
     samples= []
     for _ in range(k): 
         w = sampler()
-        samples.append(np.linalg.norm(xtrain[i+1]@ w - ytrain[i+1])/l)
+        samples.append(-np.linalg.norm(xtrain[i+1]@ w - ytrain[i+1])/l - 1/2* np.log(2*np.pi*l))
     sample_err = np.mean(samples)
     test_err = np.linalg.norm(xtest @ w - ytest)/np.linalg.norm(ytest)
     test_errors.append(test_err)

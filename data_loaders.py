@@ -29,17 +29,19 @@ def get_CIFAR10(root="./"):
 
     return input_size, num_classes, train_dataset, test_dataset
 
-def get_FMNIST(root="./"):
+def get_MNIST(root="./"):
     input_size = 28
     channels = 1
     num_classes = 10
-    fmnist = datasets.MNIST(root + "data/FMNIST", train=True, transform=transforms.ToTensor(), target_transform=None, download=True)
+    fmnist = datasets.MNIST(root + "data/MNIST", train=True, transform=transforms.ToTensor(), target_transform=None, download=True)
     data_loader = torch.utils.data.DataLoader(fmnist,
                                           batch_size=10,
                                           shuffle=True)
-    ftest = datasets.MNIST(root + "data/FMNIST", train=False, transform=transforms.ToTensor(), target_transform=None, download=True)
+    ftest = datasets.MNIST(root + "data/MNIST", train=False, transform=transforms.ToTensor(), target_transform=None, download=True)
 
-    return input_size, num_classes, data_loader, ftest
+    return input_size, num_classes, fmnist, ftest
+
+
 
 def get_synthetic_data(latent, d, n):
   x = np.random.rand(n, latent)

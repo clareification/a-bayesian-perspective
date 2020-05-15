@@ -48,7 +48,6 @@ class Model(torch.nn.Module):
     def forward(self, x):
         x = self.resnet(x)
         x = F.log_softmax(x, dim=1)
-
         return x
 
 
@@ -82,6 +81,45 @@ class Linear(nn.Module):
   def forward(self, x):
     o = self.linear(x)
     return o 
+
+class ReluEncoder(nn.Module):
+    def __init__(self, D_in, D_out):
+        super(ReluEncoder, self).__init__()
+        self.linear = torch.nn.Linear(D_in, D_out)
+
+    def forward(self, x):
+        ps = self.linear(x).clamp(min=0)
+        return ps
+
+class ConvEncoder(nn.Module):
+    def __init__(self, out_dim, n_channels, dropout_rate=0.0):
+        self.out_dim = out_dim
+        super(ConvEncoder, self).__init__()
+        self.n_channels = n_channels
+        self.dropout_rate = dropout_rate
+        num_filters=4
+
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(self.n_channels, num_filters*4, kernel_size=5, padding=2),
+            nn.BatchNorm2d(num_filters*4),
+            nn.ReLU(),
+            nn.MaxPool2d(2))
+        
+        self.layer2 = nn.Sequential(
+            nn.Conv2d(num_filters*4, num_filters*8, kernel_size=5, padding=2),
+            nn.BatchNorm2d(num_filters*8),
+            nn.ReLU(),
+            nn.MaxPool2d(2))
+        
+        self.fc = nn.Linear(7*7*num_filters*8, self.out_dim)
+
+    def forward(self, x):
+        out = self.layer1(x)
+        out = self.layer2(out)
+        out = out.view(out.size(0), -1)
+        out = self.fc(out)
+        return out
+
 class ConvexCombo(nn.Module):
     def __init__(self, D_in, D_out):
       super(ConvexCombo, self).__init__()
