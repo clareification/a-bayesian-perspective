@@ -7,6 +7,8 @@ Original file is located at
     https://colab.research.google.com/drive/1mGjRBgPlTS_9gnb-iJ9-qqXXe1-4cLV7
 """
 
+#from mpl_toolkits.mplot3d import Axes3D
+
 import torch 
 import torch.nn as nn
 import numpy as np 
@@ -20,38 +22,44 @@ from data_loaders import get_FMNIST, get_synthetic_data
 def train_step(x, y, m, o, criterion):
     o.zero_grad()
     out = m(x)
-    l = criterion(out, y.reshape(-1))
+    if isinstance(y, int):
+        y = torch.tensor([y]).reshape(-1).cuda()
+    l = criterion(out, y)
     l.backward()
     o.step()
     out2 = m(x)
-    l2 = criterion(out2, y.reshape(-1))
-    if np.random.rand() > 0.9:
-        print(l - l2)
+    l2 = criterion(out2, y)
+    # if np.random.rand() > 0.999:
+    #     print('loss change', l - l2)
     # print(torch.norm(out - out2))
     return out, l
 
-def linear_train_step(outs, w, y, criterion, model_backprop=False, model_opts=None, models=None, x=None, step_size=0.01):
-    outs = torch.stack(outs, axis=1).detach().numpy()
-    outs = outs.T
+def linear_train_step(outs, w, y, criterion, model_backprop=False, model_opts=None, models=None, x=None, step_size=0.001):
+    outs = torch.stack(outs, axis=1)#.detach().numpy()
+    if not model_backprop:
+        outs = outs.detach()
 
-    outs = torch.tensor(outs)
+    w.requires_grad = True
     w_out = torch.einsum('abc, b->ac', outs, w)
+
     
-    w_out = w_out.T
-    l = criterion(w_out, y)
+
+    l = criterion(w_out, torch.tensor([y]))
 
     l.backward()
     g = w.grad.data
-
+    #print(g)
     with torch.no_grad():
         w = w - (step_size*g)
+        if np.random.rand() > 0.999:
+            print('grad norm', torch.norm(step_size*g), l)
+
+    
     
     if model_backprop:
         for i, o in enumerate(model_opts):
-            # local_out = models[i](x)
-            # local_ou
             o.step()
-    return l
+    return w, l
     
 
 def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=torch.nn.CrossEntropyLoss):
@@ -69,16 +77,16 @@ def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_f
         outs = []
         # Take one optimization step for each model
         for i, (m, o) in enumerate(zip(ms, opts)):
-            out, l = train_step(x, y, m, o, criterion)
-            outs.append(out)
-            losses[i].append(l.detach().item())
+            out, l = train_step(x.cuda(), y, m, o, criterion)
+            outs.append(out.cpu())
+            losses[i].append(torch.clamp(l.detach(), 0, 5).item())
 
         # Linear step    
         
-        # linear_train_step(outs, w, y, criterion)
-        # w.requires_grad = True
+        w, l = linear_train_step(outs, w, y, criterion)
+        w.requires_grad = True
         
-        # lin_losses.append(l.detach().item())
+        lin_losses.append(l.detach().item())
     return lin_losses, losses, w
 
 
@@ -90,7 +98,7 @@ def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=t
     criterion = loss_fn()
 
     lin_losses = []
-    for data in training_data:     
+    for j, data in enumerate(training_data):     
         y = data[1]
 
         x = data[0].reshape([-1, 784])
@@ -103,12 +111,13 @@ def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=t
             outs.append(out)
 
         # Compute loss of linear layer and backprop         
-        l = linear_train_step(outs, w, y, criterion, True, model_opts=opts)
+        w, l = linear_train_step(outs, w, y, criterion, True, model_opts=opts, models=ms)
 
         w.requires_grad = True
         
         lin_losses.append(l.detach().item())
-    return lin_losses, w
+    print(j)
+    return lin_losses, [], w
 
 if __name__ == "__main__":
     # Load dataset
@@ -116,57 +125,69 @@ if __name__ == "__main__":
     # Train one epoch 
     
     _, _, listl, tl = get_FMNIST()
-    listl = list(listl)[:10]
-
+    listl = list(listl)
 
     dim_in = 784
     dim_out=10
     models = []
     optims = []
-    widths = [1, 10, 20, 100, 500, 1000]
+    widths = [10, 20, 50, 100, 250, 500, 750, 1000, 1500, 2000]
     for h in widths:    
         m = TwoLayer(dim_in, h, dim_out)
-        models.append(m)
+        models.append(m.cuda())
         o = torch.optim.SGD(m.parameters(), lr=0.1)
         optims.append(o)
-
+    # for o in optims:
+    #     print(o.param_groups[0]['params'][0][0][0])
 
     lin = 1/len(models) * torch.ones(len(models))
-    print(lin.requires_grad)
+
     lin.requires_grad = True
-    print(lin.requires_grad)
+
+
     lin_opt = torch.optim.SGD([lin], lr=0.01)
     l2s = [[] for _ in models]
-    for _ in range(150):
-        l2, lin = train_combo_one_epoch(lin, models, optims, listl)
-        l2s = [s + l2 for i, s in enumerate(l2s)]
+    for i in range(5):
+        print('iteration ', i)
+        lins, l2, lin = train_parallel_one_epoch(lin, models, optims, listl)
+        l2s = [s + l2[i] for i, s in enumerate(l2s)]
+
     l2 = l2s
 
     ps = lin
-    print(ps)
-    for i,ls in enumerate(l2):
-        print(ls[-1])
-        plt.plot(ls[1:], label='w=' + str(widths[i]))
-    plt.show()
-    #print(l[-1]) 
-    i = [sum(z) for z in l2]
-    print(i)
-    print(lin.detach().numpy().reshape(-1))
 
-    # plt.plot(l[10:], label='lin')
-    # plt.legend()
-    # plt.show()
+    for i,ls in enumerate(l2):
+        plt.plot(ls[1:], label='w=' + str(widths[i]), alpha=0.3)
+    plt.savefig('temp_figures/fmnist_losses.png')
+    plt.clf()
+    i = [sum(z) for z in l2]
+
 
     sums = [sum(z) for z in l2]
+    plt.clf()
     plt.scatter(sums, lin.detach().numpy().reshape(-1))
-    plt.show()
+    plt.savefig('temp_figures/fmnist_weightelbo.png')
+    # plt.show()
 
     mean_l = []
     # for j, m in enumerate(models):
     #     criterion = torch.nn.CrossEntropyLoss()
     # l = 0
     # # Compute test accuracy
-    # for i, dat in enumerate(tl):
-    #     out = m(dat[0].reshape(-1, 784))
-    #     l += criterion(out, dat[1])
-    # mean_l.append(l/i)
+    criterion = torch.nn.CrossEntropyLoss()
+    for m in models:
+        l = 0
+        n=1000
+        for i, dat in enumerate(list(tl)[:n]):
+            out = m(dat[0].reshape(-1, 784).cuda())
+            l += criterion(out, torch.tensor([dat[1]]).cuda()).detach().item()
+        mean_l.append(l/n)
+    plt.clf()
+    plt.scatter(mean_l, sums)
+    plt.savefig('temp_figures/fmnist_sotl_test.png')
+    plt.clf()
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111, projection='3d')
+    # ax.scatter(mean_l, sums, lin.detach().numpy().reshape(-1))
+    # plt.savefig('temp_figures/fmnist_sotl_test_w.png')
+

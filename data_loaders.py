@@ -41,7 +41,17 @@ def get_MNIST(root="./"):
 
     return input_size, num_classes, fmnist, ftest
 
+def get_FMNIST(root="./"):
+    input_size = 28
+    channels = 1
+    num_classes = 10
+    fmnist = datasets.FashionMNIST(root + "data/FMNIST", train=True, transform=transforms.ToTensor(), target_transform=None, download=True)
+    data_loader = torch.utils.data.DataLoader(fmnist,
+                                          batch_size=10,
+                                          shuffle=True)
+    ftest = datasets.FashionMNIST(root + "data/FMNIST", train=False, transform=transforms.ToTensor(), target_transform=None, download=True)
 
+    return input_size, num_classes, fmnist, ftest
 
 def get_synthetic_data(latent, d, n):
   x = np.random.rand(n, latent)

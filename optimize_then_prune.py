@@ -4,36 +4,6 @@ from linear_regression import *
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-class BLRModel():
-    def __init__(self, prior_sigma, noise_sigma, feature_map):
-        self.prior_sigma = prior_sigma
-        self.noise_sigma = noise_sigma 
-        self.feature_map = feature_map
-    
-    def posterior_weight_sampler(self, x, y):
-        phi = self.feature_map(x)
-        sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma)
-        return sampler
-
-    def posterior_pred_sample(self, x, y, xtest):
-        phi = self.feature_map(x)
-        if len(x) == 0:
-            sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma, N=len(xtest))
-        else:
-            sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma)
-        w = sampler() 
-        return w @ self.feature_map(xtest).T
-    
-    def get_marginal_likelihood(self, x, y):
-        phi = self.feature_map(x)
-        n = len(x)
-        ml = marginal_likelihood(phi, y, n, self.noise_sigma, self.prior_sigma)
-        return ml
-
-    def get_elbo(self, x, y, custom_noise=False):
-        phi = self.feature_map(x)
-        noise = 1.0 if custom_noise else self.noise_sigma
-        return iterative_estimator(phi, y, phi, y, prior_sigma=self.prior_sigma, l=noise)
 
 def optimize_linear_combo(w, linear_models, w_optimizer, x, y, num_epochs=1, training_type='concurrent'):
     criterion = torch.nn.MSELoss() 
@@ -139,9 +109,9 @@ def linear_ensembles_sgd_elbo_ml_plot():
     plt.clf()
     [plt.scatter(ml, w) for ml, w in zip(lbs, weights)]
     #plt.scatter(marg_liks, weights)
-    plt.title('weight as fn of elbo of model')
+    plt.title('Model Weight as function of ELBO')
     plt.xlabel('L(M)')
-    plt.ylabel('weight found by sgd')
+    plt.ylabel('Weight found by SGD')
     plt.savefig('weightvelbo.png')
     print(len(model_losses))
     plt.clf()
@@ -153,15 +123,15 @@ def linear_ensembles_sgd_elbo_ml_plot():
     ax2 = ax1.twinx()
     #[plt.scatter(range(len(ml)), ml/(-1*np.mean(ml)), label='normalized evidence') for ml in marg_liks]
     plt.savefig('weights.png')
-    ax1.set_xlabel('Negative log prior variance (base 4)')
+    ax1.set_xlabel('Log prior variance (base 4)')
     ax1.set_ylabel('Weight')
-    ax2.set_ylabel('Negative likelihood')
+    ax2.set_ylabel('Likelihood')
     #ax1.set_xlabels(lengthscales)
     sns.tsplot(marg_liks, condition='log evidence', ax = ax2)
     sns.tsplot(lbs, condition='elbo', color='green', ax = ax2)
     plt.title('Selecting Prior Variance for Bayesian Linear Regression')
     plt.tight_layout()
-    plt.savefig('nle.png')
+    plt.savefig('variance_selection.png')
     #[plt.scatter(ml, w) for w,ml  in zip(weights, model_losses))]
     #plt.show()
     return None
