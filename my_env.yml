@@ -1,0 +1,10 @@
+name: lisa_margliknew
+channels:
+  - pytorch
+dependencies:
+  - python=3.8.*
+  - pytorch=1.4.*
+  - torchvision=0.6.*
+  - matplotlib=3.1.*
+  - h5py
+

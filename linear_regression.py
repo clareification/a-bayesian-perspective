@@ -16,11 +16,10 @@ class BLRModel():
     def posterior_pred_sample(self, x, y, xtest):
         phi = self.feature_map(x)
         if len(x) == 0:
-            sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma, N=len(self.feature_map(xtest)))
+            sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma, N=len(xtest))
         else:
             sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma)
         w = sampler() 
-        
         return w @ self.feature_map(xtest).T
     
     def get_marginal_likelihood(self, x, y):
@@ -361,6 +360,7 @@ def model_selection_plot():
     #plt.show()
     return None
 
+
 if __name__ == '__main__':
     print('Welcome, you diligent and resourceful scientist!')
     #generate_lb_ml_plot(prior_sigma=1., noise_var=0.1)
@@ -378,3 +378,4 @@ Predictions: first try with posterior means, then try sampling from posterior
 Loglik function: || wTX - y||^2/sigma2 for some noise variance
 
 ''' 
+
