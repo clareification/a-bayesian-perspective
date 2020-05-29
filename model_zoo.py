@@ -92,12 +92,12 @@ class ReluEncoder(nn.Module):
         return ps
 
 class ConvEncoder(nn.Module):
-    def __init__(self, out_dim, n_channels, dropout_rate=0.0):
+    def __init__(self, out_dim, n_channels, dropout_rate=0.0, num_filters=4):
         self.out_dim = out_dim
         super(ConvEncoder, self).__init__()
         self.n_channels = n_channels
         self.dropout_rate = dropout_rate
-        num_filters=4
+        self.num_filters = num_filters
 
         self.layer1 = nn.Sequential(
             nn.Conv2d(self.n_channels, num_filters*4, kernel_size=5, padding=2),

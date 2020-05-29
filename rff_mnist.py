@@ -195,9 +195,9 @@ def generate_rff(d, X, l=1.0):
     xt = xt.reshape([-1, 1, 28, 28])
     return enc(xt).detach().numpy()
 
-def build_embedding(d, feature_map, k=None, l=None):
+def build_embedding(d, feature_map, k=None, l=None, filters=None):
     if feature_map == ConvEncoder:
-        enc = feature_map(d, n_channels=1)
+        enc = feature_map(d, n_channels=1, num_filters=filters)
         return lambda x : enc(torch.tensor(x, dtype=torch.float32).reshape([-1, 1, 28, 28])).detach().numpy()
     elif feature_map == ReluEncoder:
         enc = feature_map(784, d)
@@ -358,8 +358,6 @@ def rff_lengthscale_selection(feature_maps, num_samples, x, y, xtest, ytest, lea
             tests.append(test)
             print(np.sum(model_losses, axis=0))
 
-        
-
     return marg_liks, elbos, weights, stos
 
 def optimize_linear_combo(w, linear_models, w_optimizer, x, y,
@@ -390,7 +388,6 @@ def optimize_linear_combo(w, linear_models, w_optimizer, x, y,
             
             post_samples = torch.tensor( [s() for s in post_samplers], dtype=torch.float64).cuda()
             
-
             pred = w.cuda() @ post_samples 
             
             loss = criterion(pred, torch.tensor([y[i+1]], dtype=torch.float64).cuda())
@@ -497,8 +494,9 @@ def map_from_param(fn, dim, p=None):
         return lambda x : fn(dim, x, p)
     else:
         return lambda x : fn(dim, x)
-def plot_and_save_data(mls, els, ws, ts):
-    pkl.dump([mls, els, ws], open('rffdata.pkl', 'wb'))
+def plot_and_save_data(mls, els, ws, ts, save=False):
+    if save:
+        pkl.dump([mls, els, ws], open('rffdata.pkl', 'wb'))
     print(ws, np.sum(els[0],axis=0 ), mls)
     fig, ax1 = plt.subplots()
     ax3 = ax1.twinx()
@@ -508,9 +506,10 @@ def plot_and_save_data(mls, els, ws, ts):
     ax1.legend()
     ax3.legend()
     plt.title('Normalized weight/ml/elbo for rff model')
-    plt.savefig('rff_selection.png')
+    plt.savefig('rff_selection_nn.png')
 
-def rff_selection_plot():
+def rff_selection_plot(train_linear_combo=False):
+    print(train_linear_combo, 'Train linear combo?')
     torch.manual_seed(0)
     np.random.seed(0)
     fourier_dim = 784
@@ -529,7 +528,7 @@ def rff_selection_plot():
         xtest, ytest, x, y = load_subset_mnist(2, k)
         
         for ns in [10**(-i) for i in range(6)]:
-            mls, els, ws, stos = rff_lengthscale_selection(maps, 1, x, y, xtest, ytest, train_linear_combo=False, noise_sigma=ns)
+            mls, els, ws, stos = rff_lengthscale_selection(maps, 1, x, y, xtest, ytest, train_linear_combo=train_linear_combo, noise_sigma=ns)
             curr_dict = {'mls':mls, 'els': els, 'ws':ws, 'stos':stos}
             res_dict[ns] = curr_dict
         with open('data_v2_' + str(k) + '.pkl', 'wb') as f:
@@ -555,9 +554,9 @@ def random_nn_selection_plot():
     xtest, ytest, xtrain, ytrain = load_subset_mnist(2, k)
 
     # One: construct elbo and ml for each scale
-    n_models = 10
-    dims = [128, 256, 512, 1024, 2048]
-    embeddings = [build_embedding(d, ConvEncoder) for d in dims] + [build_embedding(d, ReluEncoder) for d in dims]
+    n_models = 5
+    dims = [8, 16, 32, 64, 128]
+    embeddings = [build_embedding(256, ConvEncoder, filters=d) for d in dims] # + [build_embedding(256, ReluEncoder) for d in dims]
     for _ in range(1):
         linear_models = [ApproxBLRModel(1/d**2, 1/d_inf, em) for em in embeddings]
         w = torch.tensor(np.ones(n_models)*1/n_models)
@@ -566,18 +565,21 @@ def random_nn_selection_plot():
         print('w: ', w)
         opt = torch.optim.SGD([w], lr=0.005)
         wnew, ls, model_losses = optimize_linear_combo(w, linear_models, opt, xtrain, ytrain, num_epochs=2)
+        print('done concurrent', wnew)
         model_ls.append(np.sum(model_losses, axis=0))
-        weights.append(w.detach().numpy())
+        weights.append(wnew.detach().numpy())
         w = torch.tensor(np.ones(n_models)*1/n_models)
         w.requires_grad = True
         opt = torch.optim.SGD([w], lr=0.005)
         wpost, _, _ = optimize_linear_combo(w, linear_models, opt, xtrain, ytrain, num_epochs=2, training_type='post')
+        print('done post', wpost)
         weights_posttraining.append(wpost.detach().numpy())
         w = torch.tensor(np.ones(n_models)*1/n_models)
         w.requires_grad = True
         print('starting the pre network')
         opt = torch.optim.SGD([w], lr=0.005)
         wpre, _, _ = optimize_linear_combo(w, linear_models, opt, xtrain, ytrain, num_epochs=2, training_type='pre')
+        print('done pre', wpre)
         weights_pretraining.append(wpre.detach().numpy())
         
         
@@ -610,19 +612,51 @@ def random_nn_selection_plot():
     ax2.set_ylabel('Likelihood')
     #ax1.set_xlabels(lengthscales)
     sns.tsplot(marg_liks, condition='log evidence', ax = ax2)
-    sns.tsplot(lbs, condition='elbo', color='green', ax = ax2)
+    #sns.tsplot(lbs, condition='elbo', color='green', ax = ax2)
     plt.title('Selecting Feature Dimension for Bayesian Linear Regression')
     plt.tight_layout()
     plt.savefig('feature_selection_weights_nn.png')
     #[plt.scatter(ml, w) for w,ml  in zip(weights, model_losses))]
     #plt.show()
     return None
-
    
 
 if __name__ == "__main__":
-    random_nn_selection_plot()
-    #plot_and_save_data(mls, els, ws, stos)
+    #rff_selection_plot(train_linear_combo=True)
+    d = pkl.load(open('data_v2_200.pkl', 'rb'))
+    print(d.keys())
+    mls = []
+    els =[] 
+    ws = []
+    stos = []
+    fig, axs = plt.subplots(1,len(d.keys()), figsize=(18,2))
+    print(len(axs))
+    def normalize_data(data):
+        d = (data - np.mean(data))/np.var(data)
+        return d
+
+    for k in list(d.keys()):
+        stos.append(normalize_data(d[k]['stos'][0]))
+        els.append(normalize_data(d[k]['els'][0]))
+        ws.append(normalize_data(d[k]['ws'][0]))
+        mls.append(normalize_data(d[k]['mls'][0]))
+
+    #sns.tsplot(els, ax=axs[1])
+    print(ws)
+    for i in range(len(stos)):
+        #axs[i].plot(stos[i]/np.abs(np.max(stos[i])), color='red')
+        axs[i].plot(els[i]/np.abs(np.max(els[i])), color='blue')
+        axs[i].plot(ws[i]/np.abs(np.max(ws[i])), color='green')
+        axs[i].plot(mls[i]/np.abs(np.max(mls[i])), color='purple')
+
+    # sns.tsplot(ws, ax=axs[0])
+    # sns.tsplot(els, ax=axs[1])
+    # sns.tsplot(mls, ax=axs[2])
+    print(len(stos), stos[0][0])
+    # sns.tsplot(stos, ax=axs[3])
+
+    plt.savefig('check.png')
+    #plot_and_save_data([mls, els, ws, stos, save=False)
     
     
     

@@ -215,20 +215,21 @@ def feature_dim_selection_plot():
     sns.tsplot(weights_posttraining, condition='weights (posterior sampling)', ax=ax1, color='purple')
     ax2 = ax1.twinx()
     #[plt.scatter(range(len(ml)), ml/(-1*np.mean(ml)), label='normalized evidence') for ml in marg_liks]
-    plt.savefig('weights.png')
+    plt.savefig('weights2.png')
     ax1.set_xlabel('Feature dimensionality')
     ax1.set_ylabel('Weight')
     ax2.set_ylabel('Likelihood')
     #ax1.set_xlabels(lengthscales)
     sns.tsplot(marg_liks, condition='log evidence', ax = ax2)
     sns.tsplot(lbs, condition='elbo', color='green', ax = ax2)
+    
     plt.title('Selecting Feature Dimension for Bayesian Linear Regression')
     plt.tight_layout()
-    plt.savefig('feature_selection_weights.png')
+    plt.legend(loc='lower left')
+    plt.savefig('feature_selection_weights2.png')
     #[plt.scatter(ml, w) for w,ml  in zip(weights, model_losses))]
     #plt.show()
     return None
-
 
 if __name__ == "__main__":
     feature_selection_plot()
