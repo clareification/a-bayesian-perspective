@@ -14,12 +14,21 @@ import torch.nn as nn
 import numpy as np 
 import torchvision
 import matplotlib.pyplot as plt
+import h5py
+from argparse import ArgumentParser
 from model_zoo import *
-from data_loaders import get_FMNIST, get_synthetic_data
-
+from data_loaders import get_FMNIST, get_synthetic_data, get_CIFAR10
+from cifar10_models.densenet import densenet121
+from cifar10_models.googlenet import googlenet
+#from cifar10models.vgg import densenet121
+from cifar10_models.resnet import resnet18
+from cifar10_models.mobilenetv2 import mobilenet_v2
+from cifar10_models.inception import inception_v3
 
 
 def train_step(x, y, m, o, criterion):
+    if len(x.shape)==3:
+        x  = x.unsqueeze(0)
     o.zero_grad()
     out = m(x)
     if isinstance(y, int):
@@ -70,10 +79,11 @@ def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_f
     criterion = loss_fn()
 
     lin_losses = []
+
     for data in training_data:     
         y = data[1]
 
-        x = data[0].reshape([-1, 784])
+        x = data[0] #.reshape([-1, 784])
         outs = []
         # Take one optimization step for each model
         for i, (m, o) in enumerate(zip(ms, opts)):
@@ -87,7 +97,9 @@ def train_parallel_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_f
         w.requires_grad = True
         
         lin_losses.append(l.detach().item())
+
     return lin_losses, losses, w
+
 
 
 def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=torch.nn.CrossEntropyLoss):
@@ -101,7 +113,7 @@ def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=t
     for j, data in enumerate(training_data):     
         y = data[1]
 
-        x = data[0].reshape([-1, 784])
+        #x = data[0].reshape([-1, 784])
         outs = []
 
         # Compute model outputs
@@ -120,21 +132,31 @@ def train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=t
     return lin_losses, [], w
 
 if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument('--seed', type=int, required=True)
+    parser.add_argument('--reps', type=int, required=True)
+
+    args = parser.parse_args()
+
+    torch.manual_seed(args.seed)
     # Load dataset
 
     # Train one epoch 
     
-    _, _, listl, tl = get_FMNIST()
+    _, _, listl, tl = get_CIFAR10()
     listl = list(listl)
 
-    dim_in = 784
-    dim_out=10
+    #dim_in = 784
+    #dim_out=10
     models = []
     optims = []
-    widths = [10, 20, 50, 100, 250, 500, 750, 1000, 1500, 2000]
-    for h in widths:    
-        m = TwoLayer(dim_in, h, dim_out)
-        models.append(m.cuda())
+    model_names = ["densenet", "googlenet", "resnet","mobilenet","inception"]
+    models = [densenet121().cuda(), googlenet().cuda(), 
+    resnet18().cuda(), mobilenet_v2().cuda(), inception_v3().cuda()]
+    #widths = [10, 20, 50, 100, 250, 500, 750, 1000, 1500, 2000]
+    for m in models: #widths:    
+        #m = TwoLayer(dim_in, h, dim_out)
+        #models.append(m.cuda())
         o = torch.optim.SGD(m.parameters(), lr=0.1)
         optims.append(o)
     # for o in optims:
@@ -147,26 +169,36 @@ if __name__ == "__main__":
 
     lin_opt = torch.optim.SGD([lin], lr=0.01)
     l2s = [[] for _ in models]
-    for i in range(5):
+    for i in range(args.reps):
         print('iteration ', i)
         lins, l2, lin = train_parallel_one_epoch(lin, models, optims, listl)
         l2s = [s + l2[i] for i, s in enumerate(l2s)]
+        for j,m in enumerate(models):
+            torch.save(m.state_dict(), model_names[j]+"reps"+str(args.reps)  +"seed"+ str(args.seed))
 
     l2 = l2s
 
     ps = lin
 
-    for i,ls in enumerate(l2):
-        plt.plot(ls[1:], label='w=' + str(widths[i]), alpha=0.3)
-    plt.savefig('temp_figures/fmnist_losses.png')
-    plt.clf()
+    # new_lin = 1/len(models) * torch.ones(len(models))
+    # new_lin.requires_grad = True
+    #print(lin.requires_grad)
+    #new_opt = torch.optim.SGD([new_lin], lr=0.01)
+    #new_l, _, new_lin = train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=torch.nn.CrossEntropyLoss)
+    #train_fmnist_k_steps(new_lin, new_opt, models, optims, listl[:10], k=1000, only_linear=True)
+
+
+    # for i,ls in enumerate(l2):
+    #     plt.plot(ls[1:], label='w=' + str(widths[i]), alpha=0.3)
+    # plt.savefig('temp_figures/fmnist_losses.png')
+    # plt.clf()
     i = [sum(z) for z in l2]
 
 
     sums = [sum(z) for z in l2]
-    plt.clf()
-    plt.scatter(sums, lin.detach().numpy().reshape(-1))
-    plt.savefig('temp_figures/fmnist_weightelbo.png')
+    # plt.clf()
+    # plt.scatter(sums, lin.detach().numpy().reshape(-1))
+    # plt.savefig('temp_figures/fmnist_weightelbo.png')
     # plt.show()
 
     mean_l = []
@@ -179,15 +211,26 @@ if __name__ == "__main__":
         l = 0
         n=1000
         for i, dat in enumerate(list(tl)[:n]):
-            out = m(dat[0].reshape(-1, 784).cuda())
+            x = dat[0]
+            if len(x.shape) ==3:
+                x = x.unsqueeze(0)
+            out = m(x.cuda())
             l += criterion(out, torch.tensor([dat[1]]).cuda()).detach().item()
         mean_l.append(l/n)
-    plt.clf()
-    plt.scatter(mean_l, sums)
-    plt.savefig('temp_figures/fmnist_sotl_test.png')
-    plt.clf()
+    # plt.clf()
+    # plt.scatter(mean_l, sums)
+    # plt.savefig('temp_figures/fmnist_sotl_test.png')
+    # plt.clf()
     # fig = plt.figure()
     # ax = fig.add_subplot(111, projection='3d')
     # ax.scatter(mean_l, sums, lin.detach().numpy().reshape(-1))
     # plt.savefig('temp_figures/fmnist_sotl_test_w.png')
+
+    with h5py.File("./res_cifar"+"reps"+str(args.reps)  +"seed"+ str(args.seed), 'w') as f:
+      tr = f.create_group('res')
+      tr.create_dataset('sums', data=sums) #cumulative XE loss 
+      tr.create_dataset('xe', data=l2) #xe loss
+      tr.create_dataset('mean_l', data=mean_l) #test error (figure 3a)
+      tr.create_dataset('weights', data=lin.detach().numpy().reshape(-1)) #concurrently trained linear weights (figure 3a)
+ 
 

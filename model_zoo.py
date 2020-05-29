@@ -51,7 +51,6 @@ class Model(torch.nn.Module):
         return x
 
 
-
 class TwoLayer(nn.Module):
   def __init__(self, D_in, H, D_out):
       """
@@ -92,33 +91,48 @@ class ReluEncoder(nn.Module):
         return ps
 
 class ConvEncoder(nn.Module):
-    def __init__(self, out_dim, n_channels, dropout_rate=0.0, num_filters=4):
+
+    def __init__(self, out_dim, input_shape, n_filter, kernel_size, padding):
         self.out_dim = out_dim
         super(ConvEncoder, self).__init__()
-        self.n_channels = n_channels
-        self.dropout_rate = dropout_rate
-        self.num_filters = num_filters
+        self.n_channels = input_shape[0]
+        self.n_filter = n_filter
+        self.kernel_size = kernel_size
+        self.padding=padding
+        self.l1_output_shape  = int((input_shape[1]-self.kernel_size +2*self.padding+1)/2)
+        self.l2_output_shape  = int((self.l1_output_shape-self.kernel_size+1)/2)
 
         self.layer1 = nn.Sequential(
-            nn.Conv2d(self.n_channels, num_filters*4, kernel_size=5, padding=2),
-            nn.BatchNorm2d(num_filters*4),
+            nn.Conv2d(in_channels =  self.n_channels, 
+                    out_channels = self.n_filter, 
+                    kernel_size= self.kernel_size, 
+                    stride =1, 
+                    padding=self.padding),
+            nn.BatchNorm2d(self.n_filter),
             nn.ReLU(),
             nn.MaxPool2d(2))
         
         self.layer2 = nn.Sequential(
-            nn.Conv2d(num_filters*4, num_filters*8, kernel_size=5, padding=2),
-            nn.BatchNorm2d(num_filters*8),
+            nn.Conv2d(in_channels =  self.n_filter, 
+                    out_channels = self.n_filter, 
+                    kernel_size= self.kernel_size, 
+                    stride =1, 
+                    padding=0),
+            nn.BatchNorm2d(self.n_filter),
             nn.ReLU(),
             nn.MaxPool2d(2))
         
-        self.fc = nn.Linear(7*7*num_filters*8, self.out_dim)
+        self.fc = nn.Linear(self.l2_output_shape*self.l2_output_shape*self.n_filter, self.out_dim)
 
     def forward(self, x):
         out = self.layer1(x)
+        #print(out.shape)
         out = self.layer2(out)
         out = out.view(out.size(0), -1)
         out = self.fc(out)
         return out
+
+
 
 class ConvexCombo(nn.Module):
     def __init__(self, D_in, D_out):
@@ -131,3 +145,97 @@ class ConvexCombo(nn.Module):
       o = torch.nn.Softmax(0)(ps)
       o = x @ o
       return o
+
+
+
+class MLP(nn.Module):
+    #  input_shape is the product of n_channels, n_channels and depth 
+    def __init__(self, input_shape, n_filters):
+        super().__init__()
+        self.hid1 = nn.Linear(input_shape, n_filters)
+        self.hid2 = nn.Linear(n_filters, n_filters)
+        self.output = nn.Linear(n_filters, 10)
+  
+    def forward(self, x):
+        batch_size = x.shape[0]
+        x= x.view(batch_size, -1)
+        x = self.hid1(x)
+        x = F.relu(x)
+        x= self.hid2(x)
+        x= F.relu(x)
+        x = self.output(x)
+        #x= F.softmax(x)
+        return x
+
+class single_MLP(nn.Module):
+    def __init__(self, input_shape, n_filters):
+        super().__init__()
+        self.hid1 = nn.Linear(input_shape, n_filters)
+        self.output = nn.Linear(n_filters, 10)
+  
+    def forward(self, x):
+        batch_size = x.shape[0]
+        x= x.view(batch_size, -1)
+        x = self.hid1(x)
+        x = F.relu(x)
+        x = self.output(x)
+        #x= F.softmax(x)
+        return x
+
+#taken from https://github.com/icpm/pytorch-cifar10/blob/master/models/LeNet.py
+class LeNet(nn.Module):
+    def __init__(self):
+        super(LeNet, self).__init__()
+        self.conv1 = nn.Conv2d(3, 6, kernel_size=5)
+        self.conv2 = nn.Conv2d(6, 16, kernel_size=5)
+        self.fc1 = nn.Linear(16*5*5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, 2)
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
+class AlexNet(nn.Module):
+    def __init__(self, num_classes=10):
+        super(AlexNet, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2),
+            nn.Conv2d(64, 192, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2),
+        )
+        self.classifier = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(256 * 2 * 2, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, 10),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), 256 * 2 * 2)
+        x = self.classifier(x)
+        return x
+
+#all other cifar-10 modelsare currently in the cifar_10_models file

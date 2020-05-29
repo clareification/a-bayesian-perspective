@@ -7,13 +7,13 @@ from data_loaders import get_MNIST
 from torchvision import transforms, datasets
 import pickle as pkl
 from linear_regression import *
-from optimize_then_prune import *
+from optimize_then_prune import BLRModel, optimize_linear_combo 
 from tqdm import tqdm
 
 def marginal_likelihood(x, y, n=200, l=1.0, prior=1.0):
     # Assume default prior for the moment?
     prior_sigma = prior
-    x = torch.tensor(x).cpu().numpy()
+    x = x.cpu().numpy()
 
     N = x.shape[0]
     S0 = prior_sigma * np.eye(x.shape[1])
@@ -26,6 +26,8 @@ def marginal_likelihood(x, y, n=200, l=1.0, prior=1.0):
 
     log = log + 1/2 * mN@ np.linalg.inv(SN) @mN
     return log 
+
+
 
 class ApproxBLRModel():
     def __init__(self, prior_sigma, noise_sigma, feature_map, learning_rate=0.1):
@@ -42,31 +44,21 @@ class ApproxBLRModel():
 
     def posterior_weight_sampler(self, x, y):
         phi = self.feature_map(x)
-        sampler = self.get_posterior_samples(phi, y, use_own_features=False)
+        sampler = self.get_posterior_samples(phi, y)
         return sampler
 
     def get_posterior_samples(self, x, y,  N=None, use_own_features=True):
-        
         prior_sigma = self.prior_sigma
         l = self.noise_sigma
         
-        if len(x) == 0:
-            mN = torch.zeros(N)
-            S0 = prior_sigma * torch.eye(N)
-            SN = S0
-
+        y = torch.tensor(y).double().cuda()
+        if use_own_features:
+            x = self.features[:len(x)]
         else:
-            if use_own_features:
-                if self.features is None:
-                    print(x.shape)
-                    self.features = self.feature_map(x)
-                x = self.features[:len(x)]
-            else:
-                x = torch.tensor(x).cuda()
-                x = self.feature_map(x)
-            # Posterior covariance
-            y = torch.tensor(y).double().cuda()
-            x = torch.tensor(x).double().cuda()
+            x = torch.tensor(x).cuda()
+            x = self.feature_map(x)
+        # Posterior covariance
+        if len(x) > 0:
             S0 = prior_sigma * torch.eye(x.shape[1]).cuda()
             SN = (torch.inverse(S0) + 1/l * x.T@x).cuda()
             SN = torch.inverse(SN)
@@ -75,21 +67,25 @@ class ApproxBLRModel():
             mN = SN @ torch.matmul(x.T, y.double())/l
             mN = mN
             SN = SN
-
+        else:
+            mN = torch.zeros(N)
+            S0 = prior_sigma * torch.eye(N)
+            SN = S0
         # Return a function that generates samples from the posterior.
         m = torch.distributions.multivariate_normal.MultivariateNormal(mN, SN)
         return lambda : m.sample().cpu().numpy()
 
     def posterior_pred_sampler(self, x, y, xtest):
-        phi = torch.tensor(x).cuda()#self.feature_map(x)
+        phi = self.feature_map(x)
         if len(x) == 0:
-            sampler = self.get_posterior_samples(phi, y, N=self.feature_map(xtest).shape[1])
+            sampler = self.get_posterior_samples(phi, y, N=len(xtest))
         else:
-            sampler = self.get_posterior_samples(phi, y, use_own_features=False)
+            sampler = self.get_posterior_samples(phi, y)
         w = sampler() 
         if len(xtest.shape) == 1:
             xtest = xtest.reshape([1, -1])
-        return lambda : torch.tensor(sampler()).double().cuda() @ torch.tensor(self.feature_map(xtest).T).double().cuda()
+        
+        return lambda : torch.tensor(sampler()).cuda() @ self.feature_map(xtest).T
     
     def get_marginal_likelihood(self, x, y):
         phi = self.feature_map(x)
@@ -132,7 +128,7 @@ class ApproxBLRModel():
         return losses, None, None, None 
             
     def get_elbo(self, x, y, k=2):
-        phi = torch.tensor(x)# self.feature_map(x)
+        phi = self.feature_map(x)
         return self.iterative_estimator(phi, y, phi, y, k)
 
     def set_features(self, x):
@@ -148,7 +144,7 @@ class ApproxBLRModel():
         sample_vars = [0]
         ytest = torch.tensor(ytest, dtype=torch.float32).cuda()
         self.set_features(xtrain)
-        xtrain = torch.tensor(self.features).cuda()
+        xtrain = self.features.cuda()
         for i in tqdm(range(n-1)):
             trains = xtrain[:i]
             train_ys = ytrain[:i]
@@ -163,11 +159,11 @@ class ApproxBLRModel():
             for _ in range(k): 
                 w = torch.tensor(sampler()).cuda()
                 
-                samples.append( (-torch.norm(xtrain[i+1].double()@ w.double() - ytrain[i+1])**2/l - 1/2* np.log(2*np.pi*l)).cpu().numpy())
+                samples.append( (-torch.norm(xtrain[i+1]@ w.double() - ytrain[i+1])/l - 1/2* np.log(2*np.pi*l)).cpu().numpy())
             
             sample_err = np.mean(samples)
-            # test_err = torch.norm(xtest @ w.double() - ytest)/torch.norm(ytest)
-            # test_errors.append(test_err)
+            test_err = torch.norm(xtest @ w.double() - ytest)/torch.norm(ytest)
+            test_errors.append(test_err)
             sample_var = np.var(samples)
             sample_errors.append(sample_err)
             sample_vars.append(sample_var)
@@ -190,6 +186,12 @@ def generate_rff(d, X, l=1.0):
     return np.sqrt(2/d) * torch.cos(fs)#np.bmat([np.cos(fs), np.sin(fs)])
 
 
+def generate_relu_features(d, X):
+    enc = ReluEncoder(X.shape[1], d)
+    xt = torch.tensor(X, dtype=torch.float32)
+    return enc(xt).detach().numpy()
+
+def generate_conv_features(d, X):
     enc = ConvEncoder(d, n_channels=1)
     xt = torch.tensor(X, dtype=torch.float32)
     xt = xt.reshape([-1, 1, 28, 28])
@@ -286,14 +288,7 @@ def generate_rff_mnist(lengthscale, fourier_dim, max_label=2):
     fx = fx[:n]
     return ftest, ytest, fx, y
 
-def get_feature_subset(d):
-    def f(x):
-        if len(x) == 0:
-            return x
-        if len(x.shape) > 1:
-            return x[:, :d]
-        else: 
-            return x[:d]
+
 def rff_lengthscale_selection(feature_maps, num_samples, x, y, xtest, ytest, learning_rates=None, train_linear_combo=False,
                                 noise_sigma=0.1):
     
@@ -369,7 +364,9 @@ def optimize_linear_combo(w, linear_models, w_optimizer, x, y,
     losses = []
     x = torch.tensor(x).cuda()
     y = torch.tensor(y).cuda()
-    for i in range(1, int(len(x)/batch_size)-1):        
+    for i in range(1, int(len(x)/batch_size)-1):
+
+        
         data = x[:i*batch_size].cuda()
         labels = y[:i*batch_size].cuda() 
         i = i * batch_size
@@ -507,6 +504,7 @@ def plot_and_save_data(mls, els, ws, ts, save=False):
     ax3.legend()
     plt.title('Normalized weight/ml/elbo for rff model')
     plt.savefig('rff_selection_nn.png')
+
 
 def rff_selection_plot(train_linear_combo=False):
     print(train_linear_combo, 'Train linear combo?')
@@ -657,7 +655,6 @@ if __name__ == "__main__":
 
     plt.savefig('check.png')
     #plot_and_save_data([mls, els, ws, stos, save=False)
-    
-    
+
     
 

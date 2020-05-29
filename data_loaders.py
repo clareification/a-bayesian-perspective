@@ -17,6 +17,8 @@ def get_CIFAR10(root="./"):
         root + "data/CIFAR10", train=True, transform=train_transform, download=True
     )
 
+    dl_train = torch.utils.data.DataLoader(train_dataset, batch_size=100, shuffle=True)
+
     test_transform = transforms.Compose(
         [
             transforms.ToTensor(),
@@ -27,7 +29,9 @@ def get_CIFAR10(root="./"):
         root + "data/CIFAR10", train=False, transform=test_transform, download=True
     )
 
-    return input_size, num_classes, train_dataset, test_dataset
+    dl_test = torch.utils.data.DataLoader(test_dataset, batch_size=100, shuffle=True)
+
+    return input_size, num_classes, train_dataset, test_dataset, dl_train, dl_test
 
 def get_MNIST(root="./"):
     input_size = 28
@@ -51,7 +55,11 @@ def get_FMNIST(root="./"):
                                           shuffle=True)
     ftest = datasets.FashionMNIST(root + "data/FMNIST", train=False, transform=transforms.ToTensor(), target_transform=None, download=True)
 
-    return input_size, num_classes, fmnist, ftest
+    data_loader_test = torch.utils.data.DataLoader(fmnist,
+                                          batch_size=10,
+                                          shuffle=True)
+
+    return input_size, num_classes, fmnist, ftest, data_loader, data_loader_test
 
 def get_synthetic_data(latent, d, n):
   x = np.random.rand(n, latent)
