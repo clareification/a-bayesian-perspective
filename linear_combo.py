@@ -180,31 +180,13 @@ if __name__ == "__main__":
 
     ps = lin
 
-    # new_lin = 1/len(models) * torch.ones(len(models))
-    # new_lin.requires_grad = True
-    #print(lin.requires_grad)
-    #new_opt = torch.optim.SGD([new_lin], lr=0.01)
-    #new_l, _, new_lin = train_combo_one_epoch(w, ms, opts, training_data, step_size=0.001, loss_fn=torch.nn.CrossEntropyLoss)
-    #train_fmnist_k_steps(new_lin, new_opt, models, optims, listl[:10], k=1000, only_linear=True)
-
-
-    # for i,ls in enumerate(l2):
-    #     plt.plot(ls[1:], label='w=' + str(widths[i]), alpha=0.3)
-    # plt.savefig('temp_figures/fmnist_losses.png')
-    # plt.clf()
     i = [sum(z) for z in l2]
 
 
     sums = [sum(z) for z in l2]
-    # plt.clf()
-    # plt.scatter(sums, lin.detach().numpy().reshape(-1))
-    # plt.savefig('temp_figures/fmnist_weightelbo.png')
-    # plt.show()
 
     mean_l = []
-    # for j, m in enumerate(models):
-    #     criterion = torch.nn.CrossEntropyLoss()
-    # l = 0
+
     # # Compute test accuracy
     criterion = torch.nn.CrossEntropyLoss()
     for m in models:
@@ -217,14 +199,7 @@ if __name__ == "__main__":
             out = m(x.cuda())
             l += criterion(out, torch.tensor([dat[1]]).cuda()).detach().item()
         mean_l.append(l/n)
-    # plt.clf()
-    # plt.scatter(mean_l, sums)
-    # plt.savefig('temp_figures/fmnist_sotl_test.png')
-    # plt.clf()
-    # fig = plt.figure()
-    # ax = fig.add_subplot(111, projection='3d')
-    # ax.scatter(mean_l, sums, lin.detach().numpy().reshape(-1))
-    # plt.savefig('temp_figures/fmnist_sotl_test_w.png')
+
 
     with h5py.File("./res_cifar"+"reps"+str(args.reps)  +"seed"+ str(args.seed), 'w') as f:
       tr = f.create_group('res')

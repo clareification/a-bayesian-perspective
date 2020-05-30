@@ -526,9 +526,13 @@ def rff_selection_plot(train_linear_combo=False):
         xtest, ytest, x, y = load_subset_mnist(2, k)
         
         for ns in [10**(-i) for i in range(6)]:
-            mls, els, ws, stos = rff_lengthscale_selection(maps, 1, x, y, xtest, ytest, train_linear_combo=train_linear_combo, noise_sigma=ns)
-            curr_dict = {'mls':mls, 'els': els, 'ws':ws, 'stos':stos}
-            res_dict[ns] = curr_dict
+            curr_dicts = []
+            for _ in range(5):
+                mls, els, ws, stos = rff_lengthscale_selection(maps, 1, x, y, xtest, ytest, train_linear_combo=train_linear_combo, noise_sigma=ns)
+                curr_dict = {'mls':mls, 'els': els, 'ws':ws, 'stos':stos}
+                curr_dicts.append(curr_dict)
+            res_dict[ns] = curr_dicts
+        
         with open('data_v2_' + str(k) + '.pkl', 'wb') as f:
             pkl.dump(res_dict, f)
 
@@ -620,7 +624,7 @@ def random_nn_selection_plot():
    
 
 if __name__ == "__main__":
-    #rff_selection_plot(train_linear_combo=True)
+    rff_selection_plot(train_linear_combo=True)
     d = pkl.load(open('data_v2_200.pkl', 'rb'))
     print(d.keys())
     mls = []
