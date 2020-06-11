@@ -11,15 +11,16 @@ class BLRModel():
         self.noise_sigma = noise_sigma 
         self.feature_map = feature_map
     
-    def posterior_weight_sampler(self, x, y):
+    def posterior_weight_sampler(self, x, y, d=None):
         phi = self.feature_map(x)
-        sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma)
+        sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma, d=d)
         return sampler
 
-    def posterior_pred_sample(self, x, y, xtest):
+    def posterior_pred_sample(self, x, y, xtest, d=None):
         phi = self.feature_map(x)
+        dim = d if d is not None else self.feature_map(x).shape[1]
         if len(x) == 0:
-            sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma, N=len(xtest))
+            sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma, d=dim)
         else:
             sampler = get_posterior_samples(phi, y, self.prior_sigma, self.noise_sigma)
         w = sampler() 
@@ -81,11 +82,10 @@ def marginal_likelihood(x, y, n=200, l=1.0, prior=1.0):
     N = x.shape[0]
     S0 = prior_sigma * np.eye(x.shape[1])
     SN = np.linalg.inv(np.linalg.inv(S0) + 1/l * x.T@x)
-    print(SN.shape, x.T.shape, x.T, y)
+    
     mN = SN @  x.T @ y/l
     log = -N/2*np.log(2*np.pi) - N/2*np.log(l)
     log = log - 1/2*( stable_log_determinant(S0) - stable_log_determinant(SN))
-    #print(log, ' unstable', np.log(np.linalg.det(SN )), 'stable:', stable_log_determinant(SN))
     log = log - 1/2 * np.dot(y,y)/l
 
     log = log + 1/2 * mN.T @ np.linalg.inv(SN) @mN
@@ -93,9 +93,7 @@ def marginal_likelihood(x, y, n=200, l=1.0, prior=1.0):
 
 def stable_log_determinant(m):
     eigs = np.linalg.eigvals(m)
-    #print('eigs', eigs[-10:])
     ls = np.log(eigs)
-    #print('log sum', np.sum(ls))
     return np.sum(ls)
 
 # def posterior_dist(prior_sigma, X, y, noise_sigma):
@@ -115,19 +113,15 @@ def train_one_epoch_iterative(w, X, y, num_steps, step_size=0.0001, log_interval
     while(np.linalg.norm(g) > 0.01 and count < num_steps):
         count += 1
         d = (x @ w - t)/ np.linalg.norm(y)
-        #print(np.linalg.norm(d))
         loss_gd.append(d)
         g = d @ x #+ w /np.linalg.norm(y) * 1/prior_sigma 
         wold = w
         w = w - step_size * g
-        # if not count % log_interval*100:
-        #     print('abs error: ', np.linalg.norm(d), np.linalg.norm(w))
-        #     print(np.linalg.norm(g), 'norm diff', np.linalg.norm(w - wold))
         
     return w, loss_gd
 
 
-def get_posterior_samples(x, y, prior_sigma=1.0, l=0.01, N=None):
+def get_posterior_samples(x, y, prior_sigma=1.0, l=0.01, d=None):
     
     # Posterior covariance
     if len(x) > 0:
@@ -136,8 +130,8 @@ def get_posterior_samples(x, y, prior_sigma=1.0, l=0.01, N=None):
         # Posterior mean
         mN = SN @ np.dot(x.T,y)/l
     else:
-        mN = np.zeros(N)
-        S0 = prior_sigma * np.eye(N)
+        mN = np.zeros(d)
+        S0 = prior_sigma * np.eye(d)
         SN = S0
     sampler = torch.distributions.multivariate_normal.MultivariateNormal(torch.tensor(mN), torch.tensor(SN))
     # Return a function that generates samples from the posterior.
@@ -152,7 +146,6 @@ def get_posterior_mean(x, y, prior_sigma=1.0, l=0.01):
     return lambda : mN
 
 def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0, k=10, prior_sigma=0.1, lse=False):
-  print('lse: ', lse)
   n = len(xtrain)
   test_errors = []
   mean_errors = []
@@ -164,7 +157,7 @@ def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0, k=10, prior_sigma=0
     w = np.linalg.lstsq(trains, train_ys, rcond=None)[0]
     err = - ( np.linalg.norm(xtrain[i] @ w - ytrain[i]))**2/(2*l) - 1/2 * np.log(2 * np.pi * l)
     mean_errors.append(err)
-    sampler = get_posterior_samples(trains, train_ys, prior_sigma=prior_sigma, l=l, N=xtrain.shape[1])
+    sampler = get_posterior_samples(trains, train_ys, prior_sigma=prior_sigma, l=l, d=xtrain.shape[1])
     
     samples= []
 
@@ -195,11 +188,10 @@ def sample_then_optimize(prior_sampler, xtrain, ytrain, l=1.0, k=1):
     a = winit[0]
     for i in range(n-1):
         l =- (w @ xtrain[i] - ytrain[i])**2/(  2*noise_sigma) - 1/2 * np.log(np.pi * 2 * noise_sigma) #/np.linalg.norm(ytrain)
-        #print(l, (w @ xtrain[i] - ytrain[i])**2/(2*noise_sigma), 1/2 * np.log(np.pi * 2 * noise_sigma))
         wopt = np.linalg.lstsq(xtrain[:i], ytrain[:i])[0]
         lopt = np.abs(wopt @ xtrain[i] - ytrain[i])**2/noise_sigma
         opts.append(lopt)
-        #print('curr loss: ', np.abs(l), 'opt',  lopt, np.linalg.norm(a - w[0]))
+
         ls.append(l)
         for _ in range(k):
             
@@ -207,12 +199,11 @@ def sample_then_optimize(prior_sampler, xtrain, ytrain, l=1.0, k=1):
             wnew, epoch_l = train_one_epoch_iterative(w, xtrain[:i+1], ytrain[:i+1], 500, prior_sigma=0.)
             
             w = wnew
-        #print('distance from optimal: ', dist)
         ws.append(w)
         dists.append(dist)
     return ls, dists, opts, ws
 
-# Figures 1a and 1b
+# Figures from the appendix
 def generate_lb_ml_plot(prior_sigma = 1.0, noise_var = 1.0):
     n = 200
     d= 100
@@ -278,7 +269,8 @@ def generate_lb_ml_plot(prior_sigma = 1.0, noise_var = 1.0):
     plt.legend()
     
     plt.savefig('dummy.png')
-    
+
+   
 def sample_opt_plot():
     d=100
     n=200
@@ -304,7 +296,7 @@ def sample_opt_plot():
         # [plt.scatter(range(len(we)), we, alpha=0.2 + 0.5*(i/len(ws)), color='green') for i, we in enumerate(ws)]
         # plt.show()
         estim_mls = [-1*(np.sum(ls[:i])) for i in range( n)]
-        print(ls)
+        #print(ls)
         plt.plot(estim_mls, label='seed ' + str(i))
 
     plt.plot([-1*sum(opts[:i]) for i in range(n)], label='estim from lstsq solution')
@@ -331,6 +323,7 @@ def sample_opt_plot():
     
     plt.savefig('sampleto.png')
 
+# Generate plot for LHS of Figure 2
 def model_selection_plot():
     '''
     Generate a figure showing
@@ -352,8 +345,8 @@ def model_selection_plot():
     num_features = [(i+1)*(int(d/n_models)) for i in range(n_models)]
     xtrain, ytrain = build_random_features(n=2*d, d=d, num_informative_features=d_inf, rand_variance=1.0)
 
-    for _ in range(5):
-        linear_models = [BLRModel(1/k**2, 1/d_inf, lambda x : x) for k in num_features]
+    for _ in range(4):
+        linear_models = [BLRModel(1/k**2, 1/d_inf, lambda x : x[:, :k]) for k in num_features]
 
         marg_liks.append([m.get_marginal_likelihood(xtrain[:, :k], ytrain) for m, k in zip(linear_models, num_features)])
         # print('done ml')
@@ -363,22 +356,29 @@ def model_selection_plot():
     # print(sto_lbs)
 
     plt.clf()
-    plt.xlabel('Number of features (x5)')
-    plt.ylabel('Negative likelihood')
+    font = {'family':'serif', 'size':16}
+    plt.rc('font', **font)
+    fig, ax = plt.subplots(figsize=(6.8, 4.8))
+    plt.xlabel('Number of Features')
+    plt.ylabel('Log Likelihood Estimate')
     #print(len(num_features), len(marg_liks))
     #ax1.set_xlabels(lengthscales)
-    sns.tsplot( marg_liks, condition='log evidence', )
-    sns.tsplot(lbs, condition='elbo', color='green', )
+    sns.tsplot( marg_liks, condition='Log Evidence', marker='o', ax=ax)
+    sns.tsplot(lbs, condition='ELBO', color='green', marker='o', ax=ax)
     print(np.argmax(lbs[0]), np.argmax(marg_liks[0]), np.argmax(sto_lbs[0]))
-    sns.tsplot(sto_lbs, condition='sample then optimize', color='purple')
-    plt.title('Selecting Number of Features for Bayesian Linear Regression')
+    sns.tsplot(sto_lbs, condition='Sample-then-optimize', color='purple', marker='o', ax=ax)
+    plt.title('Feature Selection')
+    
+    locs, labels = plt.xticks()
+    plt.xticks(locs, num_features)
+
     plt.tight_layout()
     plt.savefig('feature_dim_selection.png')
-    #[plt.scatter(ml, w) for w,ml  in zip(weights, model_losses))]
-    #plt.show()
+
     return None
 
-def gap_plot():
+# Generate data with sample plot for RHS of Figure 2
+def generate_sampling_gap_data():
     torch.manual_seed(0)
     np.random.seed(0)
 
@@ -398,38 +398,49 @@ def gap_plot():
     deltas = []
     data = pkl.load(open('gap_data.pkl', 'rb'))
     for i, s in enumerate(samples):
+        print("num samples: ", s)
         marg_liks = []
         lbs = []
         lse_lbs = []
         model_ls = []
+        sto_lses = []
         sto_lbs = []
-        for j in range(5):
+        for j in range(2):
+            print(j)
             sto = []
+            sto_lb = []
             for k in num_features:
+                print(k)
                 prior_sampler = lambda : 1/k* np.random.randn(k)
-                ls = np.array( [sample_then_optimize(prior_sampler, xtrain[:, :k], ytrain, l=1/d_inf)[0] for _ in range(s)])
+                ls = np.array([sample_then_optimize(prior_sampler, xtrain[:, :k], ytrain, l=1/d_inf)[0] for _ in range(s)])
                 mean_ps = np.sum(np.log(np.mean(np.exp(ls), axis=0)))
+                mean_logs = np.sum(np.mean(ls, axis=0))
                 sto.append(mean_ps)
-            sto_lbs.append(sto) 
-            #sto_lbs = data[i]['sto'] 
-
+                sto_lb.append(mean_logs)
+                
+            sto_lses.append(sto) 
+            sto_lbs.append(sto_lb)
+            lbs.append(sto_lb)
             linear_models = [BLRModel(1/k**2, 1/d_inf, lambda x : x) for k in num_features]
 
             marg_liks.append([m.get_marginal_likelihood(xtrain[:, :k], ytrain) for m, k in zip(linear_models, num_features)])
             
             lse_lbs.append([np.sum(m.get_elbo(xtrain[:, :k], ytrain, custom_noise=False, n_samples=s, lse=True)[2]) for m, k in zip(linear_models, num_features)])
             #lse_lbs = data[i]['lse']
-            #lbs.append([np.sum(m.get_elbo(xtrain[:, :k], ytrain, custom_noise=False, n_samples=s, lse=False)[2]) for m, k in zip(linear_models, num_features)])
+            lbs.append([np.sum(m.get_elbo(xtrain[:, :k], ytrain, custom_noise=False, n_samples=s, lse=False)[2]) for m, k in zip(linear_models, num_features)])
             
              
         deltas.append(np.mean(np.array(lse_lbs) - np.array(marg_liks)))
         sns.tsplot(sto_lbs, condition='s-t-o, k=' + str(s),  alpha=.5 + 0.5 *(i)/len(samples), linestyle=linestyles[i], color=(i/len(samples), 0.2, i/len(samples)))
-        #sns.tsplot(lbs, condition='lb' + str(s), color='orange',  alpha=.5 + 0.5 *(i)/len(samples), linestyle=linestyles[i])
+        sns.tsplot(lbs, condition='lb' + str(s), color='orange',  alpha=.5 + 0.5 *(i)/len(samples), linestyle=linestyles[i])
         sns.tsplot(lse_lbs, condition='ELBO, k=' + str(s),  alpha=.5 + 0.5 *(i)/len(samples), linestyle=linestyles[i], color=(0.2, 0.5, i/len(samples)))
-        res_dicts.append({'sto': sto_lbs, 'lse': lse_lbs})
+        res_dicts.append({'lse_sto': sto_lses, 'lse_exact':lse_lbs, 'ml':marg_liks, 'lb_sto':sto_lbs, 'lb_exact':lbs})
+        pkl.dump(res_dicts, open('gap_data.pkl', 'wb'))
+
+
     sns.tsplot(marg_liks, condition='Log Evidence', color='green', alpha=.5 + 0.5 *(i)/len(samples))
     res_dicts.append(marg_liks)
-    pkl.dump(res_dicts, open('gap_data.pkl', 'wb'))
+    
     ticks, labels = plt.xticks()
     plt.xticks(ticks, [str(int(5*(i+1))) for i in ticks])
 
@@ -443,24 +454,44 @@ def gap_plot():
     plt.plot(samples, deltas)
     plt.savefig('deltas_by_k.png')
 
+# Plot to illustrate gap between ML and ELBO estimator (Figure 2)
+def plot_lse_gap(file_name):
+    font = {'family':'serif', 'size':16}
+    plt.rc('font', **font)
+    d_list = pkl.load(open(file_name, 'rb'))
+    #print(len(d_list))
+    #print(d_list)
+    samples = [1, 3, 10, 50]
+    linestyles = ['-', '-.', ':', '--']
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    for i, d in enumerate(d_list):
+        s = samples[i]
+        #sns.tsplot(d['lb_sto'], condition='s-t-o, k=' + str(s),  alpha=.5 + 0.5 *(i)/len(samples), linestyle=linestyles[i], color=(i/len(samples), 0.2, i/len(samples)))
+        #sns.tsplot(d['lb_exact'], condition='s-t-o, k=' + str(s),  alpha=.5 + 0.5 *(i)/len(samples), linestyle=linestyles[i], color=(i/len(samples), 0.2, i/len(samples)))
+        sns.tsplot(d['lse_exact'], condition='ELBO (exact), k=' + str(s), color=(0.5 + 0.5 * i/len(samples), 0.2, 0.2),  marker='o', alpha=.2 + 0.8 *(i/len(samples))**2, linestyle=linestyles[i], ax=ax)
+        sns.tsplot(d['lse_sto'], condition='ELBO (s-t-o), k=' + str(s), color=(0.2, 0.5 + 0.5 * i/len(samples), 0.2), marker='o', alpha=.2 + 0.8 *(i/len(samples))**2, linestyle=linestyles[i], ax=ax)
+    
+    sns.tsplot(d['ml'], condition='ML',  alpha=.5 + 0.5 *(i)/len(samples), linestyle=linestyles[i], color='green', ax=ax)
+    plt.xlabel('Feature dimension')
+    n_models = 6
+    
+    num_features = [(i+1)*(int(30/n_models)) for i in range(n_models)]
+    locs, labels = plt.xticks()
+    plt.xticks(locs, num_features)
+    plt.legend(fontsize=13, loc='lower right', ncol=2)
+    plt.ylabel('Estimator Value')
+    plt.title('Closing the Gap in the ELBO')   
+    plt.tight_layout()
+    plt.savefig('gap2.png')
+    
 
 
 if __name__ == '__main__':
     print('Welcome, you diligent and resourceful scientist!')
     #generate_lb_ml_plot(prior_sigma=1., noise_var=0.1)
-   # model_selection_plot()
-    gap_plot()
+    #model_selection_plot()
+    plot_lse_gap('gap_data.pkl')
+    #gap_plot()
     print('sample then opt')
     #sample_opt_plot()
-
-''' want to answer the following questions....
-
-1. 
-
-Using the following parameters:
-Features: RFF model (?)
-Predictions: first try with posterior means, then try sampling from posterior
-Loglik function: || wTX - y||^2/sigma2 for some noise variance
-
-''' 
 

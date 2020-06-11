@@ -9,6 +9,7 @@ import pickle as pkl
 from linear_regression import *
 from optimize_then_prune import BLRModel, optimize_linear_combo 
 from tqdm import tqdm
+import pandas as pd
 
 def marginal_likelihood(x, y, n=200, l=1.0, prior=1.0):
     # Assume default prior for the moment?
@@ -47,45 +48,46 @@ class ApproxBLRModel():
         sampler = self.get_posterior_samples(phi, y)
         return sampler
 
-    def get_posterior_samples(self, x, y,  N=None, use_own_features=True):
+    def get_posterior_samples(self, x, y,  d=None, use_own_features=True):
         prior_sigma = self.prior_sigma
         l = self.noise_sigma
-        
-        y = torch.tensor(y).double().cuda()
-        if use_own_features:
-            x = self.features[:len(x)]
-        else:
-            x = torch.tensor(x).cuda()
-            x = self.feature_map(x)
-        # Posterior covariance
-        if len(x) > 0:
-            S0 = prior_sigma * torch.eye(x.shape[1]).cuda()
-            SN = (torch.inverse(S0) + 1/l * x.T@x).cuda()
-            SN = torch.inverse(SN)
-
-            # Posterior mean
-            mN = SN @ torch.matmul(x.T, y.double())/l
-            mN = mN
-            SN = SN
-        else:
-            mN = torch.zeros(N)
-            S0 = prior_sigma * torch.eye(N)
+        if len(x) == 0:
+            mN = torch.zeros(d)
+            S0 = prior_sigma * torch.eye(d)
             SN = S0
+        else:
+            y = torch.tensor(y).double().cuda()
+            if use_own_features:
+                x = self.features[:len(x)]
+            else:
+                x = torch.tensor(x).cuda()
+                x = self.feature_map(x)
+            # Posterior covariance
+            if len(x) > 0:
+                S0 = prior_sigma * torch.eye(x.shape[1]).cuda()
+                SN = (torch.inverse(S0) + 1/l * x.T@x).cuda()
+                SN = torch.inverse(SN)
+
+                # Posterior mean
+                mN = SN @ torch.matmul(x.T, y.double())/l
+                mN = mN
+                SN = SN
+            
         # Return a function that generates samples from the posterior.
         m = torch.distributions.multivariate_normal.MultivariateNormal(mN, SN)
         return lambda : m.sample().cpu().numpy()
 
-    def posterior_pred_sampler(self, x, y, xtest):
-        phi = self.feature_map(x)
+    def posterior_pred_sampler(self, x, y, xtest, d=None):
         if len(x) == 0:
-            sampler = self.get_posterior_samples(phi, y, N=len(xtest))
+            sampler = self.get_posterior_samples([], [], d=d)
         else:
+            phi = self.feature_map(x)
             sampler = self.get_posterior_samples(phi, y)
         w = sampler() 
         if len(xtest.shape) == 1:
             xtest = xtest.reshape([1, -1])
         
-        return lambda : torch.tensor(sampler()).cuda() @ self.feature_map(xtest).T
+        return lambda : torch.tensor(sampler()).double().cuda() @ self.feature_map(xtest).T
     
     def get_marginal_likelihood(self, x, y):
         phi = self.feature_map(x)
@@ -152,7 +154,7 @@ class ApproxBLRModel():
             # err = - ( np.linalg.norm(xtrain[i+1] @ w - ytrain[i+1])/l) - 1/2 * np.log(2 * np.pi * l)
             # mean_errors.append(err)
             
-            sampler = self.get_posterior_samples(trains, train_ys, N=xtrain.shape[1], use_own_features=True)
+            sampler = self.get_posterior_samples(trains, train_ys, d=self.feature_map(xtrain).shape[1], use_own_features=True)
             
             samples= []
             
@@ -288,13 +290,14 @@ def generate_rff_mnist(lengthscale, fourier_dim, max_label=2):
     fx = fx[:n]
     return ftest, ytest, fx, y
 
-
 def rff_lengthscale_selection(feature_maps, num_samples, x, y, xtest, ytest, learning_rates=None, train_linear_combo=False,
                                 noise_sigma=0.1):
     
     marg_liks = []
     elbos = []
     weights = []
+    weights_pre = []
+    weights_post = []
     n_models = len(feature_maps)
     tests = []
     stos = []
@@ -315,6 +318,7 @@ def rff_lengthscale_selection(feature_maps, num_samples, x, y, xtest, ytest, lea
             fx = fx[:n]
             
             linear_model = ApproxBLRModel(1.0, noise_sigma, lambda x : x, learning_rate = learning_rates[i])
+           
             # get ml estimates
             curr_ml = linear_model.get_marginal_likelihood(fx, y)
             ml.append(curr_ml)
@@ -327,9 +331,7 @@ def rff_lengthscale_selection(feature_maps, num_samples, x, y, xtest, ytest, lea
             approx_elbo = np.sum(approx_elbo), -np.sum(approx_elbo)/linear_model.noise_sigma + -1/2 * n * np.log(np.pi * 2 *linear_model.noise_sigma)
             sto.append(approx_elbo)
             print('sample then opt ', approx_elbo)
-            #print('approx elbo', np.sum(approx_elbo))#, np.sum(te))
-            # elbo.append(np.sum(se))
-            # print(np.sum(se))
+
             # Add the model that uses these features to the set
             linear_model = ApproxBLRModel(1.0, noise_sigma, feature_map)
             linear_model.set_features(x)
@@ -338,6 +340,7 @@ def rff_lengthscale_selection(feature_maps, num_samples, x, y, xtest, ytest, lea
         marg_liks.append(ml)
         elbos.append(elbo)
         stos.append(sto)    
+        
         if train_linear_combo:    
             w = torch.tensor(np.ones(n_models)*1/n_models)
             
@@ -346,14 +349,22 @@ def rff_lengthscale_selection(feature_maps, num_samples, x, y, xtest, ytest, lea
             #wnew = None
             #('feature map shapes: ',[ m.feature_map(x).shape for m in models])
             wnew, ls, model_losses = optimize_linear_combo(w, models, opt, x, y, num_epochs=1, batch_size=1)
-            print(wnew)
-            
-            
+            print(wnew)           
             weights.append(wnew.detach().numpy())
             tests.append(test)
-            print(np.sum(model_losses, axis=0))
 
-    return marg_liks, elbos, weights, stos
+            w = torch.tensor(np.ones(n_models)*1/n_models)            
+            w.requires_grad = True
+            opt = torch.optim.SGD([w], lr=0.005)
+            wpost, _, _ = optimize_linear_combo(w, models, opt, x, y, num_epochs=1, batch_size=1, training_type='post')
+            weights_post.append(wpost.detach().numpy())
+            w = torch.tensor(np.ones(n_models)*1/n_models)
+            w.requires_grad = True
+            opt = torch.optim.SGD([w], lr=0.005)
+            wpre, _, _ = optimize_linear_combo(w, models, opt, x, y, num_epochs=1, batch_size=1, training_type='pre')
+            weights_pre.append(wpre.detach().numpy())
+
+    return marg_liks, elbos, weights, stos, weights_pre, weights_post
 
 def optimize_linear_combo(w, linear_models, w_optimizer, x, y,
                             num_epochs=1, training_type='concurrent', batch_size=10,
@@ -374,12 +385,12 @@ def optimize_linear_combo(w, linear_models, w_optimizer, x, y,
             data = []
             labels = []
         if training_type == 'concurrent':
-                post_samplers = [m.posterior_pred_sampler(data, labels, x[i+1]) for m in linear_models]
+                post_samplers = [m.posterior_pred_sampler(data, labels, x[i+1], d=1000) for m in linear_models]
                 
         elif training_type == 'post':
-            post_samplers = [m.posterior_pred_sampler(x, y, x[i+1]) for m in linear_models]
+            post_samplers = [m.posterior_pred_sampler(x, y, x[i+1], d=1000) for m in linear_models]
         else:
-            post_samplers = [m.posterior_pred_sampler([], [], x[i+1]) for m in linear_models]
+            post_samplers = [m.posterior_pred_sampler([], [], x[i+1], d=1000) for m in linear_models]
         for j in range(num_epochs):        
             w_optimizer.zero_grad()
             
@@ -486,6 +497,7 @@ def old_plotting():
     plt.legend()
     plt.savefig('residuals.png')
 
+
 def map_from_param(fn, dim, p=None):
     if p is not None:
         return lambda x : fn(dim, x, p)
@@ -505,7 +517,7 @@ def plot_and_save_data(mls, els, ws, ts, save=False):
     plt.title('Normalized weight/ml/elbo for rff model')
     plt.savefig('rff_selection_nn.png')
 
-
+# This function generates data for Figure 1 and the RFF selection plot in Figure 3
 def rff_selection_plot(train_linear_combo=False):
     print(train_linear_combo, 'Train linear combo?')
     torch.manual_seed(0)
@@ -514,7 +526,7 @@ def rff_selection_plot(train_linear_combo=False):
     k =  200
     xtest, ytest, x, y = load_subset_mnist(2, k)
 
-    ls = [ 10**(i) for i in range(5, 14)]#, 1e16, 1e32]#, 1e20] # 1e7 is the best
+    ls = [ 10**(i) for i in range(5, 14)][::2]#, 1e16, 1e32]#, 1e20] # 1e7 is the best
     dims = [2, 8]
     maps = []
     for l in ls:
@@ -524,16 +536,16 @@ def rff_selection_plot(train_linear_combo=False):
     res_dict = {}
     for k in [200, 2000]:
         xtest, ytest, x, y = load_subset_mnist(2, k)
-        
-        for ns in [10**(-i) for i in range(6)]:
+        # Change set of noise variances to generate data for Figure 1
+        for ns in [1e-2]:
             curr_dicts = []
-            for _ in range(5):
-                mls, els, ws, stos = rff_lengthscale_selection(maps, 1, x, y, xtest, ytest, train_linear_combo=train_linear_combo, noise_sigma=ns)
-                curr_dict = {'mls':mls, 'els': els, 'ws':ws, 'stos':stos}
+            for _ in range(3):
+                mls, els, ws, stos, wpre, wpost = rff_lengthscale_selection(maps, 1, x, y, xtest, ytest, train_linear_combo=train_linear_combo, noise_sigma=ns)
+                curr_dict = {'mls':mls, 'els': els, 'ws':ws, 'stos':stos, 'wpre':wpre, 'wpost':wpost}
                 curr_dicts.append(curr_dict)
             res_dict[ns] = curr_dicts
         
-        with open('data_v2_' + str(k) + '.pkl', 'wb') as f:
+        with open('data_1e2prepost_' + str(k) + '.pkl', 'wb') as f:
             pkl.dump(res_dict, f)
 
 def random_nn_selection_plot():
@@ -624,39 +636,63 @@ def random_nn_selection_plot():
    
 
 if __name__ == "__main__":
-    rff_selection_plot(train_linear_combo=True)
-    d = pkl.load(open('data_v2_200.pkl', 'rb'))
+    #rff_selection_plot(train_linear_combo=True)
+    d = pkl.load(open('data_1e2prepost_200.pkl', 'rb'))
     print(d.keys())
     mls = []
     els =[] 
     ws = []
+    wpres = []
+    wposts = []
     stos = []
-    fig, axs = plt.subplots(1,len(d.keys()), figsize=(18,2))
-    print(len(axs))
+    font = {'family':'serif', 'size':16}
+    plt.rc('font', **font)
+    fig, ax2 = plt.subplots(1,len(d.keys()), figsize=(5.8, 4.8))
+    ax = ax2.twinx()
+    
+    
     def normalize_data(data):
+        return np.array(data)
         d = (data - np.mean(data))/np.var(data)
         return d
 
     for k in list(d.keys()):
-        stos.append(normalize_data(d[k]['stos'][0]))
-        els.append(normalize_data(d[k]['els'][0]))
-        ws.append(normalize_data(d[k]['ws'][0]))
-        mls.append(normalize_data(d[k]['mls'][0]))
+        print(d[k])
+        l = len(d[k])
+        stos.append([normalize_data(d[k][i]['stos'])[1:][::2].reshape(-1) for i in range(l)])
+        print(len(stos))
+        els.append([normalize_data(d[k][i]['els']).reshape(-1) for i in range(l)])
+        ws.append([normalize_data(d[k][i]['ws']).reshape(-1) for i in range(l)])
+        mls.append([normalize_data(d[k][i]['mls']).reshape(-1) for i in range(l)])
+        wpres.append([normalize_data(d[k][i]['wpre']).reshape(-1) for i in range(l)])
+        wposts.append([normalize_data(d[k][i]['wpost']).reshape(-1) for i in range(l)])
+
 
     #sns.tsplot(els, ax=axs[1])
-    print(ws)
-    for i in range(len(stos)):
-        #axs[i].plot(stos[i]/np.abs(np.max(stos[i])), color='red')
-        axs[i].plot(els[i]/np.abs(np.max(els[i])), color='blue')
-        axs[i].plot(ws[i]/np.abs(np.max(ws[i])), color='green')
-        axs[i].plot(mls[i]/np.abs(np.max(mls[i])), color='purple')
+    dels = pd.DataFrame(enumerate(mls[0]))
 
-    # sns.tsplot(ws, ax=axs[0])
-    # sns.tsplot(els, ax=axs[1])
-    # sns.tsplot(mls, ax=axs[2])
+    sns.tsplot(els[0], color='green', condition='ELBO', ax=ax, marker='o')
+    sns.tsplot(ws[0], color='red', condition='Weight (concurrent)', ax=ax2, marker='o')
+    sns.tsplot(wpres[0], color='orange', condition='Weight (prior sampling)', ax=ax2, marker='o')
+    sns.tsplot(wposts[0], color='purple', condition='Weight (posterior sampling)', ax=ax2, marker='o')
+    sns.tsplot(mls[0], color='blue', condition="Log Evidence", ax=ax, marker='o')
+
     print(len(stos), stos[0][0])
     # sns.tsplot(stos, ax=axs[3])
+    #ax2.set_ylabel('Weight in Combination')
+    ax.set_ylabel('Estimate Value (normalized)')
+    ax.set_xlabel('Log Frequency')
+    ax2.set_xlabel('Log Frequency')
+    locs, labels = plt.xticks()
+    plt.xticks(locs, [ (i) for i in list(range(5, 14))[::2]])
 
+    handles, labels = ax.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    ax.get_legend().remove()
+    ax2.get_legend().remove()
+    plt.legend(handles + handles2, labels + labels2, loc='lower right', fontsize=10)
+    plt.title('RFF Frequency Selection')
+    plt.tight_layout()
     plt.savefig('check.png')
     #plot_and_save_data([mls, els, ws, stos, save=False)
 
