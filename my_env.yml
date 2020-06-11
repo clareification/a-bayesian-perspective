@@ -1,4 +1,4 @@
-name: lisa_margliknew
+name: Ml
 channels:
   - pytorch
 dependencies:
