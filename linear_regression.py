@@ -32,10 +32,10 @@ class BLRModel():
         ml = marginal_likelihood(phi, y, n, l=self.noise_sigma, prior=self.prior_sigma)
         return ml
 
-    def get_elbo(self, x, y, custom_noise=False, n_samples=10, lse=False):
+    def get_elbo(self, x, y, custom_noise=False, n_samples=10, lse=False, integrate_over_params=True):
         phi = self.feature_map(x)
         noise = 1.0 if custom_noise else self.noise_sigma
-        return iterative_estimator(phi, y, phi, y, prior_sigma=self.prior_sigma, l=noise, k=n_samples, lse=lse)
+        return iterative_estimator(phi, y, phi, y, prior_sigma=self.prior_sigma, l=noise, k=n_samples, lse=lse, integrate_over_params=integrate_over_params)
 
     def get_posterior_mean_and_var(self, x, y, d=None):   
         if len(x) > 0:
@@ -99,7 +99,7 @@ def stable_log_determinant(m):
 # def posterior_dist(prior_sigma, X, y, noise_sigma):
 
 
-def train_one_epoch_iterative(w, X, y, num_steps, step_size=0.0001, log_interval=10000, noise_sigma=1.0, prior_sigma=0.1):
+def train_one_epoch_iterative(w, X, y, num_steps, step_size=0.0001, log_interval=10000, noise_sigma=0.0, prior_sigma=0.1, w0=None):
     ''' num_steps: number of gradient steps per datum
         step_size: gradient descent step size
         w: w init 
@@ -109,16 +109,39 @@ def train_one_epoch_iterative(w, X, y, num_steps, step_size=0.0001, log_interval
     x = X
     t = y
     g=100*np.linalg.norm(y)
+    # In noiseless setting, suffices to just run GD on 
+    # \|x@w - y\|^2
+    if noise_sigma == 0.:
+        while(np.linalg.norm(g) > 0.01 and count < num_steps):
+            count += 1
 
-    while(np.linalg.norm(g) > 0.01 and count < num_steps):
-        count += 1
-        d = (x @ w - t)/ np.linalg.norm(y)
-        loss_gd.append(d)
-        g = d @ x #+ w /np.linalg.norm(y) * 1/prior_sigma 
-        wold = w
-        w = w - step_size * g
+            d = (x @ w - t)/ np.linalg.norm(y) # normalize gradient stepsize so that we don't diverge.
+            loss_gd.append(d)
+            g = d @ x 
+            wold = w
+            w = w - step_size * g
+            
+        return w, loss_gd
+    
+    # Otherwise, we'll need to run GD on the following
+    # problem: \|x@w - y\|^2 + noise_sigma^2/prior_sigma^2 \|\theta - \theta_0\|^2
+    # where y = target + N(0, noise_sigma^2)
+    # (assuming y is noiseless)
+    else:
+        t = y + np.random.randn(*y.shape) * noise_sigma 
+        while(np.linalg.norm(g) > 0.01 and count < num_steps):
+            count += 1
+            d = ((x @ w - t) )
+            loss_gd.append(d)
+            g = d @ x 
+            g = g + noise_sigma/prior_sigma * (w - w0)
+            g = g/np.linalg.norm(y) # normalize step size so we don't diverge
+            wold = w
+            w = w - step_size * g
+        return w, loss_gd
+
         
-    return w, loss_gd
+
 
 
 def get_posterior_samples(x, y, prior_sigma=1.0, l=0.01, d=None):
@@ -145,63 +168,136 @@ def get_posterior_mean(x, y, prior_sigma=1.0, l=0.01):
     mN = SN @ np.dot(x.T,y)/l
     return lambda : mN
 
-def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0, k=10, prior_sigma=0.1, lse=False):
+def iterative_estimator(xtrain, ytrain, xtest, ytest, l=1.0, k=500, prior_sigma=0.1, lse=False, integrate_over_params=True):
   n = len(xtrain)
   test_errors = []
   mean_errors = []
   sample_errors = []
   sample_vars = []
+  target = ytrain + np.random.randn(*ytrain.shape)* np.sqrt(l)
   for i in range(n):
     trains = xtrain[:i]
-    train_ys = ytrain[:i]
+    train_ys = target[:i]
     w = np.linalg.lstsq(trains, train_ys, rcond=None)[0]
-    err = - ( np.linalg.norm(xtrain[i] @ w - ytrain[i]))**2/(2*l) - 1/2 * np.log(2 * np.pi * l)
+    err = - ( np.linalg.norm(xtrain[i] @ w - target[i]))**2/(2*l) - 1/2 * np.log(2 * np.pi * l)
     mean_errors.append(err)
     sampler = get_posterior_samples(trains, train_ys, prior_sigma=prior_sigma, l=l, d=xtrain.shape[1])
     
     samples= []
 
-    for _ in range(k): 
-        w = sampler()
-        samples.append(-np.linalg.norm(xtrain[i]@ w - ytrain[i])**2/(2*l) - 1/2* np.log(2*np.pi*l))
+    if integrate_over_params:
+        for _ in range(k): 
+            w = sampler()
+            samples.append(-np.linalg.norm(xtrain[i]@ w - target[i])**2/(2*l) - 1/2* np.log(2*np.pi*l))
 
-    sample_err = np.mean(samples) if not lse else np.log(np.sum (1/k * np.exp(samples)))
-    test_err = np.linalg.norm(xtest @ w - ytest)/np.linalg.norm(ytest)
-    test_errors.append(test_err)
-    sample_var = np.var(samples)
-    sample_errors.append(sample_err)
-    sample_vars.append(sample_var)
+        sample_err = np.mean(samples) if not lse else np.log(np.sum (1/k * np.exp(samples)))
+        test_err = np.linalg.norm(xtest @ w - ytest)/np.linalg.norm(ytest)
+        test_errors.append(test_err)
+        sample_var = np.var(samples)
+        sample_errors.append(sample_err)
+        sample_vars.append(sample_var)
     
-  
+    else:
+        for _ in range(k):
+            # Get posterior predictive samples
+            w = torch.tensor(sampler()).cuda()
+            samples.append(xtrain[i] @ w.cpu().numpy())
+        # Use the mean and variance of the predictive samples to estimate
+        # the parameters of the predictive distribution
+        sample_mean = np.mean(samples)
+        sample_var = np.var(samples)   *(k/(k-1))  
+        print(sample_mean,sample_var, samples)
+        # Compute p(y) under posterior          
+        log_posterior_likelihood =  -(sample_mean - target[i])**2/(2*sample_var )- np.log(2*np.pi*sample_var)/2
+        sample_errors.append(log_posterior_likelihood)
+
+  print(sample_errors)
   return test_errors, mean_errors, sample_errors, sample_vars
  
-def sample_then_optimize(prior_sampler, xtrain, ytrain, l=1.0, k=1):
+def sample_then_optimize(prior_sampler, xtrain, ytrain, l=1.0, k=1, prior_sigma=None, noisy_posterior=False):
     w = prior_sampler()
     noise_sigma = l
+    if prior_sigma is None:
+        prior_sigma = 1/len(w)**2
     n = len(xtrain)
     d = xtrain.shape[1]
     ls = []
-    dists = []
+    preds = []
     opts = []
     ws = [w]
     winit = w.copy()
     a = winit[0]
-    for i in range(n-1):
-        l =- (w @ xtrain[i] - ytrain[i])**2/(  2*noise_sigma) - 1/2 * np.log(np.pi * 2 * noise_sigma) #/np.linalg.norm(ytrain)
+    for i in range(n):
+        l =- (w @ xtrain[i] - ytrain[i])**2/(  2*noise_sigma) - 1/2 * np.log(np.pi * 2 * noise_sigma) 
+        p = w @ xtrain[i] 
+        preds.append(p)
         wopt = np.linalg.lstsq(xtrain[:i], ytrain[:i])[0]
         lopt = np.abs(wopt @ xtrain[i] - ytrain[i])**2/noise_sigma
         opts.append(lopt)
 
         ls.append(l)
         for _ in range(k):
-            
             dist = (np.linalg.norm(w - wopt))
-            wnew, epoch_l = train_one_epoch_iterative(w, xtrain[:i+1], ytrain[:i+1], 500, prior_sigma=0.)
-            
+            ns = noise_sigma if noisy_posterior else 0.
+            wnew, epoch_l = train_one_epoch_iterative(w, xtrain[:i+1], ytrain[:i+1], 500, prior_sigma=prior_sigma, noise_sigma=ns, w0=winit)            
             w = wnew
         ws.append(w)
         dists.append(dist)
-    return ls, dists, opts, ws
+    return ls, preds, opts, ws
+
+
+def train_gd_ensemble(prior_sampler, xtrain, ytrain, num_models=4, l=1.0, k=1, prior_var=None, integrate_over_params=True):
+    w_ensemble = []
+    noise_sigma = l
+    n = len(xtrain)
+    d = xtrain.shape[1]
+    l_ensemble = []
+    if prior_var is none:
+        prior_var = 1/d**2
+    # Collect posterior samples from num_models models 
+    # with initial params sampled from prior.
+    for j in num_models:    
+        w = prior_sampler()
+        
+        ls = []
+        dists = []
+        opts = []
+        ws = [w]
+        winit = w.copy()
+        a = winit[0]
+        if l > 0.:
+            # Add noise to y to sample from noisy posterior
+            target = ytrain + np.random.randn(ytrain.shape) * np.sqrt(l)
+        else:
+            target = ytrain
+        
+        for i in range(n):
+            l = - (w @ xtrain[i] - target[i])**2/(  2*noise_sigma) - 1/2 * np.log(np.pi * 2 * noise_sigma) 
+            wopt = np.linalg.lstsq(xtrain[:i], target[:i])[0]
+            lopt = np.abs(wopt @ xtrain[i] - target[i])**2/noise_sigma
+            opts.append(lopt)
+
+            ls.append(l)
+            for _ in range(k):
+                dist = (np.linalg.norm(w - wopt))
+                wnew, epoch_l = train_one_epoch_iterative(w, xtrain[:i+1], target[:i+1], 500, prior_sigma=prior_var, noise_sigma=l, w0=winit)            
+                w = wnew
+            ws.append(w)
+            dists.append(dist)
+        
+        w_ensemble.append(ws)
+        l_ensemble.append(ls)
+    
+    if integrate_over_params:
+        return np.mean(l_ensemble, axis=0)
+
+    else:
+        # Now w_ensemble of form [ [w_trajectory(m)] for m in ensemble]
+        w_ensemble = np.array(w_ensemble)
+        w_mean = np.mean(w_ensemble, axis=0)
+        w_var = np.var(w_ensemble, axis=0)*(k/k-1)
+        log_p = -(w_mean @ xtrain - ytrain)**2/(2*w_var) - np.log(2*np.pi*sample_var)/2 
+        return np.sum(log_p)
 
 # Figures from the appendix
 def generate_lb_ml_plot(prior_sigma = 1.0, noise_var = 1.0):
@@ -350,8 +446,9 @@ def model_selection_plot():
 
         marg_liks.append([m.get_marginal_likelihood(xtrain[:, :k], ytrain) for m, k in zip(linear_models, num_features)])
         # print('done ml')
-        lbs.append([np.sum(m.get_elbo(xtrain[:, :k], ytrain, custom_noise=False)[2]) for m, k in zip(linear_models, num_features)])
+        lbs.append([np.sum(m.get_elbo(xtrain[:, :k], ytrain, custom_noise=False, integrate_over_params=True)[2]) for m, k in zip(linear_models, num_features)])
         sto_results = [sample_then_optimize(lambda : np.random.normal(np.zeros(k), 1/k), xtrain[:, :k], ytrain, l=0.1) for k in num_features]
+        
         sto_lbs.append([np.sum(s[0]) for s in sto_results])
     # print(sto_lbs)
 
@@ -364,7 +461,69 @@ def model_selection_plot():
     #print(len(num_features), len(marg_liks))
     #ax1.set_xlabels(lengthscales)
     sns.tsplot( marg_liks, condition='Log Evidence', marker='o', ax=ax)
-    sns.tsplot(lbs, condition='ELBO', color='green', marker='o', ax=ax)
+    sns.tsplot(np.array(lbs), condition='ELBO', color='green', marker='o', ax=ax)
+    print(np.argmax(lbs[0]), np.argmax(marg_liks[0]), np.argmax(sto_lbs[0]))
+    sns.tsplot(sto_lbs, condition='Sample-then-optimize', color='purple', marker='o', ax=ax)
+    plt.title('Feature Selection')
+    
+    locs, labels = plt.xticks()
+    plt.xticks(locs, num_features)
+
+    plt.tight_layout()
+    plt.savefig('feature_dim_selection.png')
+
+    return None
+
+# Generate plot for LHS of Figure 2
+def model_selection_integrate_posterior():
+    '''
+    Generate a figure showing
+    '''
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    marg_liks = []
+    lbs = []
+    model_ls = []
+    sto_lbs = []
+    d = 30
+    d_inf = 15
+
+    # One: construct elbo and ml for each scale
+    n_models = 6
+    
+    lengthscales=[2**(-i ) for i in range(5,n_models+5)]
+    num_features = [(i+1)*(int(d/n_models)) for i in range(n_models)]
+    xtrain, ytrain = build_random_features(n=2*d, d=d, num_informative_features=d_inf, rand_variance=1.0)
+
+    num_samples = 4
+    for _ in range(num_samples):
+        linear_models = [BLRModel(1/k**2, 1/d_inf, lambda x : x[:, :k]) for k in num_features]
+
+        marg_liks.append([m.get_marginal_likelihood(xtrain[:, :k], ytrain) for m, k in zip(linear_models, num_features)])
+        # print('done ml')
+        lbs.append([np.sum(m.get_elbo(xtrain[:, :k], ytrain, custom_noise=False, integrate_over_params=False)[2]) for m, k in zip(linear_models, num_features)])
+        sto_results = [sample_then_optimize(lambda : np.random.normal(np.zeros(k), 1/k), xtrain[:, :k], ytrain, l=0.1) for k in num_features]
+        
+        sto_preds.append([s[1] for s in sto_results])
+    
+    # Evaluate sto predictive mean and variance
+    preds = np.array(sto_preds)
+    mean = np.mean(sto_preds, axis=0)
+    var = np.var(sto_preds, axis=0)
+
+    # print(sto_lbs)
+
+    plt.clf()
+    font = {'family':'serif', 'size':16}
+    plt.rc('font', **font)
+    fig, ax = plt.subplots(figsize=(6.8, 4.8))
+    plt.xlabel('Number of Features')
+    plt.ylabel('Log Likelihood Estimate')
+    #print(len(num_features), len(marg_liks))
+    #ax1.set_xlabels(lengthscales)
+    sns.tsplot( marg_liks, condition='Log Evidence', marker='o', ax=ax)
+    sns.tsplot(np.array(lbs), condition='ELBO', color='green', marker='o', ax=ax)
     print(np.argmax(lbs[0]), np.argmax(marg_liks[0]), np.argmax(sto_lbs[0]))
     sns.tsplot(sto_lbs, condition='Sample-then-optimize', color='purple', marker='o', ax=ax)
     plt.title('Feature Selection')
@@ -489,8 +648,8 @@ def plot_lse_gap(file_name):
 if __name__ == '__main__':
     print('Welcome, you diligent and resourceful scientist!')
     #generate_lb_ml_plot(prior_sigma=1., noise_var=0.1)
-    #model_selection_plot()
-    plot_lse_gap('gap_data.pkl')
+    model_selection_plot()
+    #plot_lse_gap('gap_data.pkl')
     #gap_plot()
     print('sample then opt')
     #sample_opt_plot()

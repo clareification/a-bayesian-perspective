@@ -136,7 +136,7 @@ class ApproxBLRModel():
     def set_features(self, x):
         self.features = self.feature_map(x)
     
-    def iterative_estimator(self, xtrain, ytrain, xtest, ytest,k=2):
+    def iterative_estimator(self, xtrain, ytrain, xtest, ytest, k=2, integrate_over_params=True):
         n = len(xtrain)
         l = self.noise_sigma
         prior_sigma = self.prior_sigma
@@ -157,21 +157,37 @@ class ApproxBLRModel():
             sampler = self.get_posterior_samples(trains, train_ys, d=self.feature_map(xtrain).shape[1], use_own_features=True)
             
             samples= []
-            
-            for _ in range(k): 
-                w = torch.tensor(sampler()).cuda()
-                
-                samples.append( (-torch.norm(xtrain[i+1]@ w.double() - ytrain[i+1])/l - 1/2* np.log(2*np.pi*l)).cpu().numpy())
-            
-            sample_err = np.mean(samples)
-            test_err = torch.norm(xtest @ w.double() - ytest)/torch.norm(ytest)
-            test_errors.append(test_err)
-            sample_var = np.var(samples)
-            sample_errors.append(sample_err)
-            sample_vars.append(sample_var)
-            
-        
-        return test_errors, mean_errors, sample_errors, sample_vars
+            # Estimate log p(y_k|y_{<k}) as \sum_{theta ~ p(theta|y_{<k}) log p(y|\theta)}
+            if integrate_over_params:
+                for _ in range(k): 
+                    w = torch.tensor(sampler()).cuda()
+                    
+                    samples.append( (-torch.norm(xtrain[i+1]@ w.double() - ytrain[i+1])/l - 1/2* np.log(2*np.pi*l)).cpu().numpy())
+
+                sample_err = np.mean(samples)
+                test_err = torch.norm(xtest @ w.double() - ytest)/torch.norm(ytest)
+                test_errors.append(test_err)
+                sample_var = np.var(samples)
+                sample_errors.append(sample_err)
+                sample_vars.append(sample_var)
+
+            # Estimate log p(y_k|y_{<k}) as E_{X \sim Posterior(y|y_{<k})} p(y_k|\mu(X), sigma^2(X))
+            else:
+                for _ in range(k):
+                    # Get posterior predictive samples
+                    w = torch.tensor(sampler()).cuda()
+                    samples.append(xtrain[i+1] @ w.double())
+                # Use the mean and variance of the predictive samples to estimate
+                # the parameters of the predictive distribution
+                sample_mean = np.mean(samples)
+                sample_var = np.var(samples)*(k/k-1)      
+                # Compute p(y) under posterior          
+                log_posterior_likelihood =  -(sample_mean - ytrain[i+1])**2/sample_var - np.log(2*np.pi*sample_var)/2
+                sample_errors.append(log_posterior_likelihood)
+
+        return_tuple = (test_errors, mean_errors, sample_errors, sample_vars)
+       
+        return return_tuple
 
 def generate_rff(d, X, l=1.0):    
     if len(X.shape)==1:
@@ -408,6 +424,8 @@ def optimize_linear_combo(w, linear_models, w_optimizer, x, y,
             print(post_samples, y[i+1])
         
     return w, losses, model_losses
+
+
 def old_plotting():
     # x = np.random.rand(n, 1)
 
